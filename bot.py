@@ -1,68 +1,37 @@
-import asyncio
-import aiohttp
-import logging
+import telebot
+import requests
+import json
 import time
-from typing import Dict, List, Optional
-from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.enums import ParseMode
+from typing import Dict, Optional
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==================== Configuration ====================
 BOT_TOKEN = "8377073485:AAFtAvmkUVbyE1GhVpgMBBGjK2IVeUsVdCo"
 API_URL = "https://demon.taitanx.workers.dev/?mobile={}"
 DEVELOPER = "@aadi_io"
-CACHE_DURATION = 300  # 5 minutes cache
 
-# Logging configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Initialize bot
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# ==================== Bot Initialization ====================
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
-
-# ==================== States ====================
-class SearchStates(StatesGroup):
-    waiting_for_number = State()
-
-# ==================== Cache System ====================
-class CacheManager:
-    def __init__(self):
-        self.cache: Dict[str, tuple] = {}
-    
-    def get(self, key: str) -> Optional[dict]:
-        if key in self.cache:
-            data, timestamp = self.cache[key]
-            if time.time() - timestamp < CACHE_DURATION:
-                return data
-            else:
-                del self.cache[key]
-        return None
-    
-    def set(self, key: str, data: dict):
-        self.cache[key] = (data, time.time())
-    
-    def clear_old(self):
-        current_time = time.time()
-        keys_to_delete = [
-            key for key, (_, timestamp) in self.cache.items()
-            if current_time - timestamp >= CACHE_DURATION
-        ]
-        for key in keys_to_delete:
-            del self.cache[key]
-
-cache = CacheManager()
+# Simple cache
+cache: Dict[str, tuple] = {}
+CACHE_DURATION = 300  # 5 minutes
 
 # ==================== Utility Functions ====================
+def get_from_cache(key: str) -> Optional[dict]:
+    """Get data from cache if not expired"""
+    if key in cache:
+        data, timestamp = cache[key]
+        if time.time() - timestamp < CACHE_DURATION:
+            return data
+        else:
+            del cache[key]
+    return None
+
+def save_to_cache(key: str, data: dict):
+    """Save data to cache"""
+    cache[key] = (data, time.time())
+
 def format_phone(phone: str) -> str:
     """Format phone number for display"""
     if phone and phone.startswith('91'):
@@ -84,66 +53,50 @@ def format_address(address: str) -> str:
     
     return "\n".join(formatted_parts) if formatted_parts else "Not Available"
 
-def create_main_keyboard() -> InlineKeyboardMarkup:
+def create_main_keyboard():
     """Create main menu keyboard"""
-    keyboard = [
-        [
-            InlineKeyboardButton(text="🔍 New Search", callback_data="new_search"),
-            InlineKeyboardButton(text="📖 Help", callback_data="help")
-        ],
-        [
-            InlineKeyboardButton(text="👨‍💻 Developer", url=f"https://t.me/{DEVELOPER[1:]}")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("🔍 New Search", callback_data="new_search"),
+        InlineKeyboardButton("📖 Help", callback_data="help")
+    )
+    markup.row(
+        InlineKeyboardButton("👨‍💻 Developer", url=f"https://t.me/{DEVELOPER[1:]}")
+    )
+    return markup
 
-def create_back_keyboard() -> InlineKeyboardMarkup:
+def create_back_keyboard():
     """Create back button keyboard"""
-    keyboard = [
-        [InlineKeyboardButton(text="◀️ Back to Menu", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("◀️ Back to Menu", callback_data="main_menu"))
+    return markup
 
-def create_search_again_keyboard() -> InlineKeyboardMarkup:
+def create_search_again_keyboard():
     """Create search again keyboard"""
-    keyboard = [
-        [
-            InlineKeyboardButton(text="🔄 Search Again", callback_data="new_search"),
-            InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("🔄 Search Again", callback_data="new_search"),
+        InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")
+    )
+    return markup
 
-# ==================== API Functions ====================
-async def fetch_mobile_info(mobile: str) -> Optional[dict]:
-    """Fetch mobile information from API with caching"""
-    
+# ==================== API Function ====================
+def fetch_mobile_info(mobile: str) -> Optional[dict]:
+    """Fetch mobile information from API"""
     # Check cache first
-    cached_data = cache.get(mobile)
+    cached_data = get_from_cache(mobile)
     if cached_data:
-        logger.info(f"Cache hit for {mobile}")
         return cached_data
     
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                API_URL.format(mobile),
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    cache.set(mobile, data)
-                    logger.info(f"API call successful for {mobile}")
-                    return data
-                else:
-                    logger.error(f"API returned status {response.status}")
-                    return None
-    except asyncio.TimeoutError:
-        logger.error(f"Timeout for {mobile}")
-        return None
+        response = requests.get(API_URL.format(mobile), timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            save_to_cache(mobile, data)
+            return data
     except Exception as e:
-        logger.error(f"Error fetching data: {e}")
-        return None
+        print(f"Error fetching data: {e}")
+    return None
 
 # ==================== Message Templates ====================
 def get_welcome_message(user_name: str) -> str:
@@ -199,10 +152,10 @@ def get_help_message() -> str:
 <i>Dev: {DEVELOPER}</i>
 """
 
-def format_result_message(data: dict, mobile: str) -> str:
-    """Format the result message beautifully"""
+def format_result_message(data: dict, mobile: str) -> list:
+    """Format the result message"""
     if not data.get('data') or len(data['data']) == 0:
-        return f"""
+        return [f"""
 <b>❌ No Results Found</b>
 ━━━━━━━━━━━━━━━━━━━━━
 
@@ -210,7 +163,7 @@ No information available for:
 <code>{mobile}</code>
 
 <i>Please verify the number and try again.</i>
-"""
+"""]
     
     # Remove duplicates
     unique_records = []
@@ -263,36 +216,35 @@ No information available for:
     
     return messages
 
-# ==================== Command Handlers ====================
-@dp.message(CommandStart())
-async def start_command(message: Message, state: FSMContext):
+# User states storage
+user_states = {}
+
+# ==================== Handlers ====================
+@bot.message_handler(commands=['start'])
+def start_command(message):
     """Handle /start command"""
-    await state.clear()
-    
     user_name = message.from_user.first_name or "User"
-    
-    # Send welcome message with typing animation
-    await bot.send_chat_action(message.chat.id, "typing")
-    await asyncio.sleep(0.5)
-    
-    await message.answer(
+    bot.send_message(
+        message.chat.id,
         get_welcome_message(user_name),
+        parse_mode='HTML',
         reply_markup=create_main_keyboard()
     )
 
-@dp.message(Command("help"))
-async def help_command(message: Message):
+@bot.message_handler(commands=['help'])
+def help_command(message):
     """Handle /help command"""
-    await message.answer(
+    bot.send_message(
+        message.chat.id,
         get_help_message(),
+        parse_mode='HTML',
         reply_markup=create_back_keyboard()
     )
 
-@dp.message(Command("search"))
-async def search_command(message: Message, state: FSMContext):
+@bot.message_handler(commands=['search'])
+def search_command(message):
     """Handle /search command"""
-    await state.set_state(SearchStates.waiting_for_number)
-    
+    user_states[message.chat.id] = 'waiting_for_number'
     search_prompt = """
 <b>🔍 Mobile Number Search</b>
 ━━━━━━━━━━━━━━━━━━━━━
@@ -301,188 +253,136 @@ Please enter a <b>10-digit mobile number</b>:
 
 <i>Example: 8789793154</i>
 """
-    
-    await message.answer(
+    bot.send_message(
+        message.chat.id,
         search_prompt,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Cancel", callback_data="main_menu")]
-        ])
+        parse_mode='HTML'
     )
 
-# ==================== Callback Handlers ====================
-@dp.callback_query(F.data == "main_menu")
-async def main_menu_callback(callback: CallbackQuery, state: FSMContext):
-    """Handle main menu callback"""
-    await state.clear()
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    """Handle callback queries"""
+    if call.data == "main_menu":
+        user_name = call.from_user.first_name or "User"
+        bot.edit_message_text(
+            get_welcome_message(user_name),
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=create_main_keyboard()
+        )
+        if call.message.chat.id in user_states:
+            del user_states[call.message.chat.id]
     
-    user_name = callback.from_user.first_name or "User"
-    
-    await callback.message.edit_text(
-        get_welcome_message(user_name),
-        reply_markup=create_main_keyboard()
-    )
-    await callback.answer()
-
-@dp.callback_query(F.data == "help")
-async def help_callback(callback: CallbackQuery):
-    """Handle help callback"""
-    await callback.message.edit_text(
-        get_help_message(),
-        reply_markup=create_back_keyboard()
-    )
-    await callback.answer()
-
-@dp.callback_query(F.data == "new_search")
-async def new_search_callback(callback: CallbackQuery, state: FSMContext):
-    """Handle new search callback"""
-    await state.set_state(SearchStates.waiting_for_number)
-    
-    search_prompt = """
-<b>🔍 Mobile Number Search</b>
-━━━━━━━━━━━━━━━━━━━━━
-
-Please enter a <b>10-digit mobile number</b>:
-
-<i>Example: 8789793154</i>
-"""
-    
-    await callback.message.edit_text(
-        search_prompt,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Cancel", callback_data="main_menu")]
-        ])
-    )
-    await callback.answer()
-
-# ==================== Message Handlers ====================
-@dp.message(SearchStates.waiting_for_number)
-async def process_mobile_number(message: Message, state: FSMContext):
-    """Process mobile number input"""
-    mobile = message.text.strip().replace(" ", "").replace("-", "").replace("+91", "")
-    
-    # Validate mobile number
-    if not mobile.isdigit():
-        error_msg = """
-<b>❌ Invalid Input</b>
-
-Please enter only digits.
-<i>Example: 8789793154</i>
-"""
-        await message.answer(error_msg)
-        return
-    
-    if len(mobile) != 10:
-        error_msg = """
-<b>❌ Invalid Length</b>
-
-Mobile number must be exactly 10 digits.
-<i>Example: 8789793154</i>
-"""
-        await message.answer(error_msg)
-        return
-    
-    # Send searching animation
-    searching_msg = await message.answer(
-        "<b>🔍 Searching...</b>\n\n<i>Please wait while we fetch the information.</i>"
-    )
-    
-    # Show typing animation
-    await bot.send_chat_action(message.chat.id, "typing")
-    
-    # Fetch data
-    data = await fetch_mobile_info(mobile)
-    
-    if data:
-        messages = format_result_message(data, mobile)
-        
-        if isinstance(messages, list):
-            # Delete searching message
-            await searching_msg.delete()
-            
-            # Send each result
-            for msg in messages:
-                await message.answer(
-                    msg,
-                    reply_markup=create_search_again_keyboard()
-                )
-                await asyncio.sleep(0.3)  # Small delay between messages
-        else:
-            await searching_msg.edit_text(
-                messages,
-                reply_markup=create_search_again_keyboard()
-            )
-    else:
-        error_msg = """
-<b>⚠️ Service Unavailable</b>
-━━━━━━━━━━━━━━━━━━━━━
-
-Unable to fetch information at the moment.
-Please try again later.
-
-<i>If the problem persists, contact {DEVELOPER}</i>
-"""
-        await searching_msg.edit_text(
-            error_msg.format(DEVELOPER=DEVELOPER),
-            reply_markup=create_search_again_keyboard()
+    elif call.data == "help":
+        bot.edit_message_text(
+            get_help_message(),
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=create_back_keyboard()
         )
     
-    await state.clear()
+    elif call.data == "new_search":
+        user_states[call.message.chat.id] = 'waiting_for_number'
+        search_prompt = """
+<b>🔍 Mobile Number Search</b>
+━━━━━━━━━━━━━━━━━━━━━
 
-@dp.message()
-async def handle_any_message(message: Message, state: FSMContext):
-    """Handle any other message"""
+Please enter a <b>10-digit mobile number</b>:
+
+<i>Example: 8789793154</i>
+"""
+        bot.edit_message_text(
+            search_prompt,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='HTML'
+        )
+    
+    bot.answer_callback_query(call.id)
+
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    """Handle all text messages"""
     text = message.text.strip().replace(" ", "").replace("-", "").replace("+91", "")
     
-    # Check if it might be a mobile number
-    if text.isdigit() and len(text) == 10:
-        await state.set_state(SearchStates.waiting_for_number)
-        await process_mobile_number(message, state)
+    # Check if user is waiting for number input or if it's a direct number
+    if message.chat.id in user_states and user_states[message.chat.id] == 'waiting_for_number' or (text.isdigit() and len(text) == 10):
+        
+        if not text.isdigit():
+            bot.send_message(
+                message.chat.id,
+                "<b>❌ Invalid Input</b>\n\nPlease enter only digits.\n<i>Example: 8789793154</i>",
+                parse_mode='HTML'
+            )
+            return
+        
+        if len(text) != 10:
+            bot.send_message(
+                message.chat.id,
+                "<b>❌ Invalid Length</b>\n\nMobile number must be exactly 10 digits.\n<i>Example: 8789793154</i>",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Send searching message
+        searching_msg = bot.send_message(
+            message.chat.id,
+            "<b>🔍 Searching...</b>\n\n<i>Please wait while we fetch the information.</i>",
+            parse_mode='HTML'
+        )
+        
+        # Fetch data
+        data = fetch_mobile_info(text)
+        
+        if data:
+            messages = format_result_message(data, text)
+            
+            # Delete searching message
+            bot.delete_message(message.chat.id, searching_msg.message_id)
+            
+            # Send results
+            for msg in messages:
+                bot.send_message(
+                    message.chat.id,
+                    msg,
+                    parse_mode='HTML',
+                    reply_markup=create_search_again_keyboard()
+                )
+        else:
+            bot.edit_message_text(
+                f"<b>⚠️ Service Unavailable</b>\n━━━━━━━━━━━━━━━━━━━━━\n\nUnable to fetch information at the moment.\nPlease try again later.\n\n<i>If the problem persists, contact {DEVELOPER}</i>",
+                message.chat.id,
+                searching_msg.message_id,
+                parse_mode='HTML',
+                reply_markup=create_search_again_keyboard()
+            )
+        
+        # Clear user state
+        if message.chat.id in user_states:
+            del user_states[message.chat.id]
+    
     else:
-        info_msg = """
-<b>ℹ️ How can I help you?</b>
-
-• To search, click "🔍 New Search"
-• Or send a 10-digit mobile number directly
-• For help, click "📖 Help"
-"""
-        await message.answer(
-            info_msg,
+        bot.send_message(
+            message.chat.id,
+            "<b>ℹ️ How can I help you?</b>\n\n• To search, click '🔍 New Search'\n• Or send a 10-digit mobile number directly\n• For help, click '📖 Help'",
+            parse_mode='HTML',
             reply_markup=create_main_keyboard()
         )
 
-# ==================== Error Handler ====================
-@dp.error()
-async def error_handler(event, exception):
-    """Handle errors"""
-    logger.error(f"Error: {exception}")
-    return True
-
-# ==================== Periodic Tasks ====================
-async def periodic_cache_cleanup():
-    """Periodically clean up old cache entries"""
-    while True:
-        await asyncio.sleep(600)  # Every 10 minutes
-        cache.clear_old()
-        logger.info("Cache cleanup completed")
-
-# ==================== Main Function ====================
-async def main():
-    """Start the bot"""
-    logger.info("Starting bot...")
-    
-    # Start periodic tasks
-    asyncio.create_task(periodic_cache_cleanup())
-    
-    # Start polling
-    await dp.start_polling(bot, skip_updates=True)
-
+# ==================== Main ====================
 if __name__ == "__main__":
     print("""
     ╔══════════════════════════════════════╗
     ║   Mobile Info Bot - Professional     ║
     ║   Developer: @aadi_io                ║
     ║   Status: Running...                 ║
+    ║   Bot Token: Active                  ║
     ╚══════════════════════════════════════╝
     """)
     
-    asyncio.run(main())
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        print(f"Error: {e}")
