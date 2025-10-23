@@ -166,6 +166,8 @@ No information available for:
 <code>{mobile}</code>
 
 <i>Please verify the number and try again.</i>
+
+<i>Dev: {DEVELOPER}</i>
 """]
     
     # Remove duplicates
@@ -245,13 +247,15 @@ def help_command(message):
 def search_command(message):
     """Handle /search command"""
     user_states[message.chat.id] = 'waiting_for_number'
-    search_prompt = """
+    search_prompt = f"""
 <b>🔍 Mobile Number Search</b>
 ━━━━━━━━━━━━━━━━━━━━━
 
 Please enter a <b>10-digit mobile number</b>:
 
 <i>Example: 8789793154</i>
+
+<i>Dev: {DEVELOPER}</i>
 """
     bot.send_message(
         message.chat.id,
@@ -286,13 +290,15 @@ def callback_handler(call):
         
         elif call.data == "new_search":
             user_states[call.message.chat.id] = 'waiting_for_number'
-            search_prompt = """
+            search_prompt = f"""
 <b>🔍 Mobile Number Search</b>
 ━━━━━━━━━━━━━━━━━━━━━
 
 Please enter a <b>10-digit mobile number</b>:
 
 <i>Example: 8789793154</i>
+
+<i>Dev: {DEVELOPER}</i>
 """
             bot.edit_message_text(
                 search_prompt,
@@ -316,7 +322,7 @@ def handle_message(message):
         if not text.isdigit():
             bot.send_message(
                 message.chat.id,
-                "<b>❌ Invalid Input</b>\n\nPlease enter only digits.\n<i>Example: 8789793154</i>",
+                f"<b>❌ Invalid Input</b>\n\nPlease enter only digits.\n<i>Example: 8789793154</i>\n\n<i>Dev: {DEVELOPER}</i>",
                 parse_mode='HTML'
             )
             return
@@ -324,7 +330,7 @@ def handle_message(message):
         if len(text) != 10:
             bot.send_message(
                 message.chat.id,
-                "<b>❌ Invalid Length</b>\n\nMobile number must be exactly 10 digits.\n<i>Example: 8789793154</i>",
+                f"<b>❌ Invalid Length</b>\n\nMobile number must be exactly 10 digits.\n<i>Example: 8789793154</i>\n\n<i>Dev: {DEVELOPER}</i>",
                 parse_mode='HTML'
             )
             return
@@ -343,7 +349,10 @@ def handle_message(message):
             messages = format_result_message(data, text)
             
             # Delete searching message
-            bot.delete_message(message.chat.id, searching_msg.message_id)
+            try:
+                bot.delete_message(message.chat.id, searching_msg.message_id)
+            except:
+                pass
             
             # Send results
             for msg in messages:
@@ -369,7 +378,7 @@ def handle_message(message):
     else:
         bot.send_message(
             message.chat.id,
-            "<b>ℹ️ How can I help you?</b>\n\n• To search, click '🔍 New Search'\n• Or send a 10-digit mobile number directly\n• For help, click '📖 Help'",
+            f"<b>ℹ️ How can I help you?</b>\n\n• To search, click '🔍 New Search'\n• Or send a 10-digit mobile number directly\n• For help, click '📖 Help'\n\n<i>Dev: {DEVELOPER}</i>",
             parse_mode='HTML',
             reply_markup=create_main_keyboard()
         )
@@ -381,12 +390,16 @@ if __name__ == "__main__":
     ║   Mobile Info Bot - Professional     ║
     ║   Developer: @aadi_io                ║
     ║   Status: Running...                 ║
-    ║   Bot Token: Active                  ║
+    ║   Token: 8377073485:AAFt...          ║
     ╚══════════════════════════════════════╝
     """)
     
     try:
+        print(f"Bot started successfully! Dev: {DEVELOPER}")
         bot.polling(none_stop=True, interval=0, timeout=20)
+    except KeyboardInterrupt:
+        print("\n\nBot stopped by user")
     except Exception as e:
         print(f"Error: {e}")
+        print("Restarting in 5 seconds...")
         time.sleep(5)
