@@ -17,6 +17,9 @@ bot = telebot.TeleBot(BOT_TOKEN)
 cache: Dict[str, tuple] = {}
 CACHE_DURATION = 300  # 5 minutes
 
+# User states storage
+user_states = {}
+
 # ==================== Utility Functions ====================
 def get_from_cache(key: str) -> Optional[dict]:
     """Get data from cache if not expired"""
@@ -216,9 +219,6 @@ No information available for:
     
     return messages
 
-# User states storage
-user_states = {}
-
 # ==================== Handlers ====================
 @bot.message_handler(commands=['start'])
 def start_command(message):
@@ -262,30 +262,31 @@ Please enter a <b>10-digit mobile number</b>:
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     """Handle callback queries"""
-    if call.data == "main_menu":
-        user_name = call.from_user.first_name or "User"
-        bot.edit_message_text(
-            get_welcome_message(user_name),
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode='HTML',
-            reply_markup=create_main_keyboard()
-        )
-        if call.message.chat.id in user_states:
-            del user_states[call.message.chat.id]
-    
-    elif call.data == "help":
-        bot.edit_message_text(
-            get_help_message(),
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode='HTML',
-            reply_markup=create_back_keyboard()
-        )
-    
-    elif call.data == "new_search":
-        user_states[call.message.chat.id] = 'waiting_for_number'
-        search_prompt = """
+    try:
+        if call.data == "main_menu":
+            user_name = call.from_user.first_name or "User"
+            bot.edit_message_text(
+                get_welcome_message(user_name),
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=create_main_keyboard()
+            )
+            if call.message.chat.id in user_states:
+                del user_states[call.message.chat.id]
+        
+        elif call.data == "help":
+            bot.edit_message_text(
+                get_help_message(),
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=create_back_keyboard()
+            )
+        
+        elif call.data == "new_search":
+            user_states[call.message.chat.id] = 'waiting_for_number'
+            search_prompt = """
 <b>🔍 Mobile Number Search</b>
 ━━━━━━━━━━━━━━━━━━━━━
 
@@ -293,14 +294,16 @@ Please enter a <b>10-digit mobile number</b>:
 
 <i>Example: 8789793154</i>
 """
-        bot.edit_message_text(
-            search_prompt,
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode='HTML'
-        )
-    
-    bot.answer_callback_query(call.id)
+            bot.edit_message_text(
+                search_prompt,
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML'
+            )
+        
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        print(f"Callback error: {e}")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
@@ -383,6 +386,7 @@ if __name__ == "__main__":
     """)
     
     try:
-        bot.polling(none_stop=True)
+        bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
         print(f"Error: {e}")
+        time.sleep(5)
