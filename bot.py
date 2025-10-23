@@ -13,7 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.enums import ParseMode
 
 # ==================== Configuration ====================
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "8377073485:AAFtAvmkUVbyE1GhVpgMBBGjK2IVeUsVdCo"
 API_URL = "https://demon.taitanx.workers.dev/?mobile={}"
 DEVELOPER = "@aadi_io"
 CACHE_DURATION = 300  # 5 minutes cache
