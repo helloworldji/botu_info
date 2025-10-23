@@ -15,6 +15,13 @@ API_URL = "https://demon.taitanx.workers.dev/?mobile={}"
 DEVELOPER = "@aadi_io"
 ADMIN_ID = 8175884349
 
+# 🔒 Privacy Protected Numbers - DO NOT SEARCH
+PROTECTED_NUMBERS = [
+    '9161636853',  # Protected 1
+    '9451180555',  # Protected 2
+    '6306791897'   # Protected 3
+]
+
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
@@ -23,6 +30,7 @@ stats = {
     'total_requests': 0,
     'successful_searches': 0,
     'failed_searches': 0,
+    'privacy_blocks': 0,
     'total_users': set(),
     'start_time': time.time()
 }
@@ -43,13 +51,34 @@ def get_from_cache(key: str) -> Optional[dict]:
 def save_to_cache(key: str, data: dict):
     cache[key] = (data, time.time())
 
+def clean_number(number: str) -> str:
+    """Clean and normalize phone number to 10 digits"""
+    # Remove all non-digits
+    cleaned = ''.join(filter(str.isdigit, number))
+    
+    # Remove leading 91 if present
+    if cleaned.startswith('91') and len(cleaned) > 10:
+        cleaned = cleaned[2:]
+    
+    # Remove leading 0 if present
+    if cleaned.startswith('0') and len(cleaned) == 11:
+        cleaned = cleaned[1:]
+    
+    # Take last 10 digits
+    if len(cleaned) > 10:
+        cleaned = cleaned[-10:]
+    
+    return cleaned
+
 def format_phone(phone: str) -> str:
     """Format: +91 98765 43210"""
-    if phone and len(phone) >= 10:
-        clean = phone.replace('+', '').replace('-', '').replace(' ', '')
-        if clean.startswith('91'):
-            clean = clean[2:]
-        return f"+91 {clean[:5]} {clean[5:]}"
+    if not phone:
+        return "Not Available"
+    
+    cleaned = clean_number(phone)
+    
+    if len(cleaned) == 10:
+        return f"+91 {cleaned[:5]} {cleaned[5:]}"
     return phone
 
 def format_address(address: str) -> str:
@@ -57,22 +86,35 @@ def format_address(address: str) -> str:
     if not address or address == "null":
         return "Not Available"
     
-    # Split by !! and clean
-    parts = [p.strip() for p in address.replace("!!", "!").split("!") if p.strip() and p.strip() != "null"]
+    # Split by !! and ! and clean
+    parts = address.replace("!!", "!").split("!")
     
-    if not parts:
+    # Clean and filter parts
+    cleaned_parts = []
+    for part in parts:
+        part = part.strip()
+        if part and part != "null" and len(part) > 2:
+            cleaned_parts.append(part)
+    
+    if not cleaned_parts:
         return "Not Available"
     
-    # Format cleanly
-    formatted = []
-    for part in parts[:4]:  # Limit to 4 lines
-        if len(part) > 2:
-            formatted.append(part)
-    
-    return "\n".join(formatted)
+    # Join with proper formatting (max 4 lines)
+    return "\n".join(cleaned_parts[:4])
 
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
+
+def is_protected_number(number: str) -> bool:
+    """Check if number is privacy protected"""
+    cleaned = clean_number(number)
+    is_protected = cleaned in PROTECTED_NUMBERS
+    
+    if is_protected:
+        stats['privacy_blocks'] += 1
+        print(f"🔒 Privacy block: {cleaned}")
+    
+    return is_protected
 
 def get_uptime() -> str:
     uptime = time.time() - stats['start_time']
@@ -82,7 +124,6 @@ def get_uptime() -> str:
 
 # ==================== Keyboards ====================
 def create_main_keyboard(is_admin_user=False):
-    """Ultra-clean main keyboard"""
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton("🔍 Start Search", callback_data="new_search"))
     if is_admin_user:
@@ -91,7 +132,6 @@ def create_main_keyboard(is_admin_user=False):
     return markup
 
 def create_admin_keyboard():
-    """Clean admin keyboard"""
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
@@ -105,7 +145,6 @@ def create_admin_keyboard():
     return markup
 
 def create_result_keyboard():
-    """Clean result keyboard"""
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("🔄 New Search", callback_data="new_search"),
@@ -115,27 +154,51 @@ def create_result_keyboard():
 
 # ==================== API ====================
 def fetch_mobile_info(mobile: str) -> Optional[dict]:
+    """Fetch mobile info with privacy protection"""
+    
+    # 🔒 PRIVACY CHECK FIRST
+    if is_protected_number(mobile):
+        return {'protected': True}
+    
+    # Check cache
     cached_data = get_from_cache(mobile)
     if cached_data:
         return cached_data
     
     try:
         stats['total_requests'] += 1
-        response = requests.get(API_URL.format(mobile), timeout=10)
+        response = requests.get(API_URL.format(mobile), timeout=15)
+        
         if response.status_code == 200:
-            data = response.json()
-            save_to_cache(mobile, data)
-            stats['successful_searches'] += 1
-            return data
+            try:
+                data = response.json()
+                
+                # Validate data
+                if data and isinstance(data, dict):
+                    save_to_cache(mobile, data)
+                    stats['successful_searches'] += 1
+                    return data
+                else:
+                    stats['failed_searches'] += 1
+                    return None
+            except:
+                stats['failed_searches'] += 1
+                return None
+        else:
+            stats['failed_searches'] += 1
+            return None
+            
+    except requests.Timeout:
+        print(f"Timeout for: {mobile}")
         stats['failed_searches'] += 1
+        return None
     except Exception as e:
         print(f"API Error: {e}")
         stats['failed_searches'] += 1
-    return None
+        return None
 
 # ==================== Messages ====================
 def get_welcome_message(user_name: str, is_admin_user: bool) -> str:
-    """Ultra-minimal welcome"""
     admin_badge = "\n\n🔐 <b>Admin Access Enabled</b>" if is_admin_user else ""
     
     return f"""
@@ -148,8 +211,19 @@ Fast, accurate mobile number searches with detailed information.{admin_badge}
 <i>Developed by {DEVELOPER}</i>
 """
 
+def get_privacy_message(number: str) -> str:
+    """Privacy protected number message"""
+    return f"""
+<b>🔒 Privacy Protected</b>
+
+Number: <code>{format_phone(number)}</code>
+
+Due to privacy reasons, information for this number cannot be displayed.
+
+<i>Respecting user privacy • {DEVELOPER}</i>
+"""
+
 def get_admin_stats() -> str:
-    """Clean stats display"""
     success_rate = 0
     if stats['total_requests'] > 0:
         success_rate = (stats['successful_searches'] / stats['total_requests']) * 100
@@ -160,37 +234,40 @@ def get_admin_stats() -> str:
 <b>Requests:</b> {stats['total_requests']}
 <b>Success:</b> {stats['successful_searches']} ({success_rate:.1f}%)
 <b>Failed:</b> {stats['failed_searches']}
+<b>Privacy Blocks:</b> {stats['privacy_blocks']}
 <b>Users:</b> {len(stats['total_users'])}
 <b>Cache:</b> {len(cache)} items
+
+<b>Protected Numbers:</b> {len(PROTECTED_NUMBERS)}
 
 <b>Uptime:</b> {get_uptime()}
 <b>Started:</b> {datetime.fromtimestamp(stats['start_time']).strftime('%d %b %Y, %H:%M')}
 """
 
 def get_admin_about() -> str:
-    """Clean about info"""
     return f"""
 <b>ℹ️ Bot Information</b>
 
 <b>Name:</b> Mobile Info Lookup Bot
-<b>Version:</b> 2.5 Professional
+<b>Version:</b> 2.7 Professional
 <b>Developer:</b> {DEVELOPER}
 <b>Mode:</b> Webhook
 
 <b>Features:</b>
 • Advanced caching system
 • Real-time statistics
+• Privacy protection ({len(PROTECTED_NUMBERS)} numbers)
 • Admin dashboard
 • Clean minimalist UI
 
 <b>Tech Stack:</b>
 • Python 3.13
 • pyTelegramBotAPI
-• Flask + Webhook
+• Flask Webhook
+• psutil monitoring
 """
 
 def get_system_info() -> str:
-    """Clean system info"""
     try:
         cpu = psutil.cpu_percent(interval=1)
         mem = psutil.virtual_memory().percent
@@ -204,53 +281,91 @@ def get_system_info() -> str:
 <b>Disk:</b> {disk:.1f}%
 
 <b>Uptime:</b> {get_uptime()}
+<b>Protected:</b> {len(PROTECTED_NUMBERS)} numbers
 
 <b>Status:</b> ✅ Healthy
 """
     except:
         return "<b>💾 System Resources</b>\n\n<i>Information unavailable</i>"
 
-def format_result_message(data: dict, mobile: str) -> list:
-    """Ultra-clean result formatting"""
-    if not data.get('data') or len(data['data']) == 0:
+def format_result_message(data: dict, searched_number: str) -> list:
+    """Ultra-clean result formatting with validation"""
+    
+    # 🔒 Check if privacy protected
+    if data.get('protected'):
+        return [get_privacy_message(searched_number)]
+    
+    # Check if data exists
+    if not data or not isinstance(data, dict):
         return [f"""
 <b>No Results Found</b>
 
-Number: <code>{mobile}</code>
+Number: <code>{format_phone(searched_number)}</code>
 
-Please verify the number and try again.
+No information available for this number.
+
+<i>{DEVELOPER}</i>
+"""]
+    
+    # Get data array
+    data_array = data.get('data', [])
+    
+    if not data_array or not isinstance(data_array, list) or len(data_array) == 0:
+        return [f"""
+<b>No Results Found</b>
+
+Number: <code>{format_phone(searched_number)}</code>
+
+No information available for this number.
+
+<i>{DEVELOPER}</i>
 """]
     
     # Remove duplicates
     unique_records = []
     seen = set()
-    for record in data['data']:
+    
+    for record in data_array:
+        if not isinstance(record, dict):
+            continue
+            
         record_tuple = tuple(sorted(record.items()))
         if record_tuple not in seen:
             seen.add(record_tuple)
             unique_records.append(record)
     
+    if not unique_records:
+        return [f"""
+<b>No Results Found</b>
+
+Number: <code>{format_phone(searched_number)}</code>
+
+No information available for this number.
+
+<i>{DEVELOPER}</i>
+"""]
+    
     messages = []
-    for i, record in enumerate(unique_records[:3], 1):
+    
+    for i, record in enumerate(unique_records[:3], 1):  # Max 3 results
         name = record.get('name', 'N/A')
         fname = record.get('fname', 'N/A')
-        mobile_num = record.get('mobile', mobile)
+        mobile_num = record.get('mobile', searched_number)
         alt = record.get('alt', '')
         circle = record.get('circle', 'N/A')
         uid = record.get('id', 'N/A')
-        address = format_address(record.get('address', ''))
+        address = record.get('address', '')
         
-        # Format alternate
-        if alt and alt != 'null' and len(alt) >= 10:
-            alt_formatted = format_phone(alt)
-        else:
-            alt_formatted = 'Not Available'
-        
-        # Clean mobile format
+        # Format data
         mobile_formatted = format_phone(mobile_num)
+        alt_formatted = format_phone(alt) if alt and alt != 'null' else 'Not Available'
+        address_formatted = format_address(address)
+        
+        # Result header
+        result_header = f"<b>Search Result {i}</b>" if len(unique_records) > 1 else "<b>Search Result</b>"
         
         message = f"""
-<b>Search Result</b>
+{result_header}
 
 <b>👤 {name}</b>
 Father: {fname}
@@ -264,7 +379,7 @@ Circle: {circle}
 ID: <code>{uid}</code>
 
 <b>📍 Address</b>
-{address}
+{address_formatted}
 
 <i>{DEVELOPER}</i>
 """
@@ -374,14 +489,20 @@ def callback_handler(call):
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     stats['total_users'].add(message.from_user.id)
-    text = message.text.strip().replace(" ", "").replace("-", "").replace("+", "").replace("91", "", 1)
+    
+    # Clean the input number
+    text = clean_number(message.text)
     
     # Check if waiting for input or direct number
-    if message.chat.id in user_states or (text.isdigit() and len(text) == 10):
+    is_waiting = message.chat.id in user_states
+    is_valid_number = text.isdigit() and len(text) == 10
+    
+    if is_waiting or is_valid_number:
+        # Validate number
         if not text.isdigit() or len(text) != 10:
             bot.reply_to(
                 message, 
-                "❌ Invalid number\n\nSend 10 digits only\nExample: <code>9876543210</code>", 
+                "❌ <b>Invalid Number</b>\n\nPlease send a valid 10-digit mobile number\n\n<i>Example: 9876543210</i>", 
                 parse_mode='HTML'
             )
             return
@@ -389,7 +510,7 @@ def handle_message(message):
         # Show searching
         searching_msg = bot.send_message(
             message.chat.id, 
-            "🔍 <b>Searching...</b>", 
+            "🔍 <b>Searching...</b>\n\n<i>Please wait</i>", 
             parse_mode='HTML'
         )
         
@@ -402,6 +523,7 @@ def handle_message(message):
         except:
             pass
         
+        # Format and send results
         if data:
             messages = format_result_message(data, text)
             for msg in messages:
@@ -414,17 +536,20 @@ def handle_message(message):
         else:
             bot.send_message(
                 message.chat.id,
-                f"<b>⚠️ Service Unavailable</b>\n\nPlease try again later\n\n<i>{DEVELOPER}</i>",
+                f"<b>⚠️ Service Unavailable</b>\n\nUnable to fetch information at this time.\n\nPlease try again later.\n\n<i>{DEVELOPER}</i>",
                 parse_mode='HTML',
                 reply_markup=create_result_keyboard()
             )
         
+        # Clear state
         user_states.pop(message.chat.id, None)
+    
     else:
+        # Unknown input
         is_admin_user = is_admin(message.from_user.id)
         bot.send_message(
             message.chat.id,
-            "Send a 10-digit mobile number to search\n\nor use the button below",
+            "Send a 10-digit mobile number to search\n\n<i>or use the button below</i>",
             parse_mode='HTML',
             reply_markup=create_main_keyboard(is_admin_user)
         )
@@ -435,10 +560,12 @@ def index():
     return {
         'status': 'running',
         'bot': 'Mobile Info Bot',
-        'version': '2.5',
+        'version': '2.7',
         'developer': DEVELOPER,
+        'protected_numbers': len(PROTECTED_NUMBERS),
         'uptime': get_uptime(),
-        'requests': stats['total_requests']
+        'requests': stats['total_requests'],
+        'privacy_blocks': stats['privacy_blocks']
     }
 
 @app.route('/health', methods=['GET'])
@@ -472,15 +599,20 @@ def set_webhook():
 if __name__ == "__main__":
     print("""
 ╔═══════════════════════════════════╗
-║  Mobile Info Bot v2.5 Professional ║
+║  Mobile Info Bot v2.7 Professional ║
 ║  Developer: @aadi_io               ║
 ╚═══════════════════════════════════╝
     """)
     
+    print(f"\n🔒 Privacy Protected Numbers:")
+    for num in PROTECTED_NUMBERS:
+        print(f"   • {format_phone(num)}")
+    
     if set_webhook():
-        print(f"✅ Admin: {ADMIN_ID}")
+        print(f"\n✅ Admin ID: {ADMIN_ID}")
+        print(f"✅ Protected: {len(PROTECTED_NUMBERS)} numbers")
         port = int(os.environ.get('PORT', 10000))
-        print(f"✅ Port: {port}")
+        print(f"✅ Port: {port}\n")
         app.run(host='0.0.0.0', port=port, debug=False)
     else:
         print("❌ Failed to start")
