@@ -1,28 +1,43 @@
 import telebot
 import requests
-import json
 import time
+import psutil
+import os
+from datetime import datetime
 from typing import Dict, Optional
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Update
+from flask import Flask, request
+from threading import Thread
 
 # ==================== Configuration ====================
-BOT_TOKEN = "8377073485:AAFtAvmkUVbyE1GhVpgMBBGjK2IVeUsVdCo"
+BOT_TOKEN = "8377073485:AAFEON1BT-j138BN5HDKiqpGKnlI1mQIZjE"
+WEBHOOK_URL = "https://botu-info.onrender.com"
 API_URL = "https://demon.taitanx.workers.dev/?mobile={}"
 DEVELOPER = "@aadi_io"
+ADMIN_ID = 8175884349
 
 # Initialize bot
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Simple cache
-cache: Dict[str, tuple] = {}
-CACHE_DURATION = 300  # 5 minutes
+# Flask app
+app = Flask(__name__)
 
-# User states storage
+# Statistics
+stats = {
+    'total_requests': 0,
+    'successful_searches': 0,
+    'failed_searches': 0,
+    'total_users': set(),
+    'start_time': time.time()
+}
+
+# Cache & States
+cache: Dict[str, tuple] = {}
+CACHE_DURATION = 300
 user_states = {}
 
 # ==================== Utility Functions ====================
 def get_from_cache(key: str) -> Optional[dict]:
-    """Get data from cache if not expired"""
     if key in cache:
         data, timestamp = cache[key]
         if time.time() - timestamp < CACHE_DURATION:
@@ -32,145 +47,217 @@ def get_from_cache(key: str) -> Optional[dict]:
     return None
 
 def save_to_cache(key: str, data: dict):
-    """Save data to cache"""
     cache[key] = (data, time.time())
 
 def format_phone(phone: str) -> str:
-    """Format phone number for display"""
     if phone and phone.startswith('91'):
         return f"+91 {phone[2:7]} {phone[7:]}"
     return phone
 
 def format_address(address: str) -> str:
-    """Format address with proper line breaks"""
     if not address:
         return "Not Available"
-    
     parts = address.replace("!!", "!").split("!")
-    formatted_parts = []
-    
-    for part in parts:
-        part = part.strip()
-        if part and part != "null":
-            formatted_parts.append(f"  • {part}")
-    
+    formatted_parts = [f"  • {part.strip()}" for part in parts if part.strip() and part.strip() != "null"]
     return "\n".join(formatted_parts) if formatted_parts else "Not Available"
 
+def is_admin(user_id: int) -> bool:
+    return user_id == ADMIN_ID
+
+def get_uptime() -> str:
+    uptime = time.time() - stats['start_time']
+    hours, remainder = divmod(int(uptime), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}h {minutes}m {seconds}s"
+
+def get_system_stats() -> dict:
+    try:
+        return {
+            'cpu': psutil.cpu_percent(interval=1),
+            'memory': psutil.virtual_memory().percent,
+            'disk': psutil.disk_usage('/').percent
+        }
+    except:
+        return {'cpu': 0, 'memory': 0, 'disk': 0}
+
+# ==================== Keyboards ====================
 def create_main_keyboard():
-    """Create main menu keyboard"""
-    markup = InlineKeyboardMarkup()
-    markup.row(
-        InlineKeyboardButton("🔍 New Search", callback_data="new_search"),
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🔍 Search", callback_data="new_search"),
         InlineKeyboardButton("📖 Help", callback_data="help")
     )
-    markup.row(
-        InlineKeyboardButton("👨‍💻 Developer", url=f"https://t.me/{DEVELOPER[1:]}")
+    markup.add(InlineKeyboardButton("👨‍💻 Developer", url=f"https://t.me/{DEVELOPER[1:]}"))
+    return markup
+
+def create_admin_keyboard():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
+        InlineKeyboardButton("🏓 Ping", callback_data="admin_ping")
     )
+    markup.add(
+        InlineKeyboardButton("ℹ️ About", callback_data="admin_about"),
+        InlineKeyboardButton("💾 System", callback_data="admin_system")
+    )
+    markup.add(InlineKeyboardButton("◀️ Back", callback_data="main_menu"))
     return markup
 
 def create_back_keyboard():
-    """Create back button keyboard"""
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("◀️ Back to Menu", callback_data="main_menu"))
+    markup.add(InlineKeyboardButton("◀️ Back", callback_data="main_menu"))
     return markup
 
 def create_search_again_keyboard():
-    """Create search again keyboard"""
-    markup = InlineKeyboardMarkup()
-    markup.row(
-        InlineKeyboardButton("🔄 Search Again", callback_data="new_search"),
-        InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🔄 New", callback_data="new_search"),
+        InlineKeyboardButton("🏠 Menu", callback_data="main_menu")
     )
     return markup
 
 # ==================== API Function ====================
 def fetch_mobile_info(mobile: str) -> Optional[dict]:
-    """Fetch mobile information from API"""
-    # Check cache first
     cached_data = get_from_cache(mobile)
     if cached_data:
         return cached_data
     
     try:
+        stats['total_requests'] += 1
         response = requests.get(API_URL.format(mobile), timeout=10)
         if response.status_code == 200:
             data = response.json()
             save_to_cache(mobile, data)
+            stats['successful_searches'] += 1
             return data
+        stats['failed_searches'] += 1
     except Exception as e:
-        print(f"Error fetching data: {e}")
+        print(f"API Error: {e}")
+        stats['failed_searches'] += 1
     return None
 
-# ==================== Message Templates ====================
-def get_welcome_message(user_name: str) -> str:
-    """Generate welcome message"""
+# ==================== Messages ====================
+def get_welcome_message(user_name: str, user_id: int) -> str:
+    admin_text = "\n\n🔐 <b>Admin Access</b>" if is_admin(user_id) else ""
     return f"""
 <b>👋 Welcome, {user_name}!</b>
 
-<b>📱 Mobile Information Lookup Bot</b>
-━━━━━━━━━━━━━━━━━━━━━
-
-This bot provides detailed information about Indian mobile numbers quickly and efficiently.
+<b>📱 Mobile Info Lookup Bot</b>
 
 <b>✨ Features:</b>
-• Fast and accurate results
-• Clean, professional interface
-• Detailed information display
-• Smart caching for speed
+✓ Fast & Accurate
+✓ Smart Caching
+✓ Professional UI
+✓ Detailed Info
 
-<b>🚀 Get started by clicking the button below!</b>
+<b>🚀 Quick Start:</b>
+• Click "🔍 Search"
+• Or send 10-digit number{admin_text}
 
-<i>Developed with ❤️ by {DEVELOPER}</i>
+<i>Dev: {DEVELOPER}</i>
 """
 
 def get_help_message() -> str:
-    """Generate help message"""
     return f"""
-<b>📖 Help & Guide</b>
-━━━━━━━━━━━━━━━━━━━━━
+<b>📖 User Guide</b>
 
-<b>How to use this bot:</b>
-
-<b>1️⃣ Quick Search:</b>
-   • Click "🔍 New Search"
-   • Enter a 10-digit mobile number
-   • Get instant results!
-
-<b>2️⃣ Direct Input:</b>
-   • Simply send any 10-digit number
-   • Bot will automatically search
-
-<b>📋 Information Provided:</b>
-   ✓ Owner Name
-   ✓ Father's Name
-   ✓ Full Address
-   ✓ Alternate Numbers
-   ✓ Telecom Circle
-   ✓ Unique ID
+<b>🔍 How to Search:</b>
+1. Click "🔍 Search"
+2. Enter 10-digit number
+3. Get instant results
 
 <b>💡 Tips:</b>
-• Enter numbers without +91 or 0
-• Example: 8789793154
+• No +91 prefix needed
+• Example: <code>8789793154</code>
+• Direct input supported
+
+<b>📋 Info Provided:</b>
+✓ Name & Father's Name
+✓ Complete Address
+✓ Alternate Number
+✓ Telecom Circle
 
 <i>Dev: {DEVELOPER}</i>
 """
 
+def get_admin_stats() -> str:
+    return f"""
+<b>📊 Bot Statistics</b>
+
+<b>📈 Usage:</b>
+• Total Requests: <code>{stats['total_requests']}</code>
+• Successful: <code>{stats['successful_searches']}</code>
+• Failed: <code>{stats['failed_searches']}</code>
+• Users: <code>{len(stats['total_users'])}</code>
+• Cache: <code>{len(cache)}</code>
+
+<b>⏱ Uptime:</b>
+<code>{get_uptime()}</code>
+
+<b>📅 Started:</b>
+<code>{datetime.fromtimestamp(stats['start_time']).strftime('%Y-%m-%d %H:%M')}</code>
+
+<i>Admin: {DEVELOPER}</i>
+"""
+
+def get_admin_about() -> str:
+    return f"""
+<b>ℹ️ About Bot</b>
+
+<b>📱 Information:</b>
+• Name: Mobile Info Bot
+• Version: 2.0 Pro
+• Dev: {DEVELOPER}
+• Language: Python 3.13
+• Mode: Webhook
+
+<b>🔧 Features:</b>
+• Advanced Caching
+• Admin Dashboard
+• Real-time Stats
+• Auto Error Handling
+
+<b>🌐 Integration:</b>
+• API: Demon TaitanX
+• Timeout: 10s
+• Cache: 5 minutes
+
+<i>Built with ❤️</i>
+"""
+
+def get_system_info() -> str:
+    try:
+        sys_stats = get_system_stats()
+        return f"""
+<b>💾 System Info</b>
+
+<b>⚙️ Resources:</b>
+• CPU: <code>{sys_stats['cpu']:.1f}%</code>
+• Memory: <code>{sys_stats['memory']:.1f}%</code>
+• Disk: <code>{sys_stats['disk']:.1f}%</code>
+
+<b>🔄 Uptime:</b>
+<code>{get_uptime()}</code>
+
+<b>🌐 Webhook:</b>
+<code>{WEBHOOK_URL}</code>
+
+<i>Status: ✅ Healthy</i>
+"""
+    except:
+        return "<b>⚠️ Info unavailable</b>"
+
 def format_result_message(data: dict, mobile: str) -> list:
-    """Format the result message"""
     if not data.get('data') or len(data['data']) == 0:
         return [f"""
-<b>❌ No Results Found</b>
-━━━━━━━━━━━━━━━━━━━━━
+<b>❌ No Results</b>
 
-No information available for:
-<code>{mobile}</code>
+No info for: <code>{mobile}</code>
 
-<i>Please verify the number and try again.</i>
-
+<i>Verify and try again.</i>
 <i>Dev: {DEVELOPER}</i>
 """]
     
-    # Remove duplicates
     unique_records = []
     seen = set()
     for record in data['data']:
@@ -180,7 +267,7 @@ No information available for:
             unique_records.append(record)
     
     messages = []
-    for i, record in enumerate(unique_records, 1):
+    for i, record in enumerate(unique_records[:3], 1):
         name = record.get('name', 'N/A')
         fname = record.get('fname', 'N/A')
         mobile_num = record.get('mobile', 'N/A')
@@ -189,53 +276,61 @@ No information available for:
         uid = record.get('id', 'N/A')
         address = format_address(record.get('address', ''))
         
-        # Format alternate number
-        if alt and alt != 'null':
-            alt_formatted = format_phone(alt.replace('91', '91'))
-        else:
-            alt_formatted = 'Not Available'
+        alt_formatted = format_phone(alt) if alt and alt != 'null' else 'Not Available'
         
         message = f"""
-<b>📱 Search Results #{i}</b>
-━━━━━━━━━━━━━━━━━━━━━
+<b>📱 Result #{i}</b>
 
-<b>👤 Personal Information</b>
-<b>Name:</b> {name}
-<b>Father:</b> {fname}
+<b>👤 Personal</b>
+• Name: <code>{name}</code>
+• Father: <code>{fname}</code>
 
-<b>📞 Contact Details</b>
-<b>Primary:</b> <code>{mobile_num}</code>
-<b>Alternate:</b> <code>{alt_formatted}</code>
+<b>📞 Contact</b>
+• Primary: <code>{mobile_num}</code>
+• Alternate: <code>{alt_formatted}</code>
 
-<b>🌐 Network Information</b>
-<b>Circle:</b> {circle}
-<b>ID:</b> <code>{uid}</code>
+<b>🌐 Network</b>
+• Circle: <code>{circle}</code>
+• ID: <code>{uid}</code>
 
 <b>📍 Address</b>
 {address}
 
-━━━━━━━━━━━━━━━━━━━━━
 <i>Dev: {DEVELOPER}</i>
 """
         messages.append(message)
     
     return messages
 
-# ==================== Handlers ====================
+# ==================== Bot Handlers ====================
 @bot.message_handler(commands=['start'])
 def start_command(message):
-    """Handle /start command"""
     user_name = message.from_user.first_name or "User"
+    user_id = message.from_user.id
+    stats['total_users'].add(user_id)
+    
     bot.send_message(
         message.chat.id,
-        get_welcome_message(user_name),
+        get_welcome_message(user_name, user_id),
         parse_mode='HTML',
         reply_markup=create_main_keyboard()
     )
 
+@bot.message_handler(commands=['admin'])
+def admin_command(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "⛔️ Access Denied")
+        return
+    
+    bot.send_message(
+        message.chat.id,
+        "<b>🔐 Admin Panel</b>\n\nSelect option:",
+        parse_mode='HTML',
+        reply_markup=create_admin_keyboard()
+    )
+
 @bot.message_handler(commands=['help'])
 def help_command(message):
-    """Handle /help command"""
     bot.send_message(
         message.chat.id,
         get_help_message(),
@@ -243,41 +338,20 @@ def help_command(message):
         reply_markup=create_back_keyboard()
     )
 
-@bot.message_handler(commands=['search'])
-def search_command(message):
-    """Handle /search command"""
-    user_states[message.chat.id] = 'waiting_for_number'
-    search_prompt = f"""
-<b>🔍 Mobile Number Search</b>
-━━━━━━━━━━━━━━━━━━━━━
-
-Please enter a <b>10-digit mobile number</b>:
-
-<i>Example: 8789793154</i>
-
-<i>Dev: {DEVELOPER}</i>
-"""
-    bot.send_message(
-        message.chat.id,
-        search_prompt,
-        parse_mode='HTML'
-    )
-
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-    """Handle callback queries"""
     try:
         if call.data == "main_menu":
             user_name = call.from_user.first_name or "User"
+            user_id = call.from_user.id
             bot.edit_message_text(
-                get_welcome_message(user_name),
+                get_welcome_message(user_name, user_id),
                 call.message.chat.id,
                 call.message.message_id,
                 parse_mode='HTML',
                 reply_markup=create_main_keyboard()
             )
-            if call.message.chat.id in user_states:
-                del user_states[call.message.chat.id]
+            user_states.pop(call.message.chat.id, None)
         
         elif call.data == "help":
             bot.edit_message_text(
@@ -290,21 +364,43 @@ def callback_handler(call):
         
         elif call.data == "new_search":
             user_states[call.message.chat.id] = 'waiting_for_number'
-            search_prompt = f"""
-<b>🔍 Mobile Number Search</b>
-━━━━━━━━━━━━━━━━━━━━━
-
-Please enter a <b>10-digit mobile number</b>:
-
-<i>Example: 8789793154</i>
-
-<i>Dev: {DEVELOPER}</i>
-"""
             bot.edit_message_text(
-                search_prompt,
+                "<b>🔍 Mobile Search</b>\n\nEnter 10-digit number:\n<i>Example: 8789793154</i>",
                 call.message.chat.id,
                 call.message.message_id,
                 parse_mode='HTML'
+            )
+        
+        elif call.data == "admin_stats" and is_admin(call.from_user.id):
+            bot.edit_message_text(
+                get_admin_stats(),
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=create_admin_keyboard()
+            )
+        
+        elif call.data == "admin_ping" and is_admin(call.from_user.id):
+            start = time.time()
+            ping = round((time.time() - start) * 1000, 2)
+            bot.answer_callback_query(call.id, f"🏓 Pong! {ping}ms", show_alert=True)
+        
+        elif call.data == "admin_about" and is_admin(call.from_user.id):
+            bot.edit_message_text(
+                get_admin_about(),
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=create_admin_keyboard()
+            )
+        
+        elif call.data == "admin_system" and is_admin(call.from_user.id):
+            bot.edit_message_text(
+                get_system_info(),
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=create_admin_keyboard()
             )
         
         bot.answer_callback_query(call.id)
@@ -313,93 +409,108 @@ Please enter a <b>10-digit mobile number</b>:
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
-    """Handle all text messages"""
+    stats['total_users'].add(message.from_user.id)
     text = message.text.strip().replace(" ", "").replace("-", "").replace("+91", "")
     
-    # Check if user is waiting for number input or if it's a direct number
-    if message.chat.id in user_states and user_states[message.chat.id] == 'waiting_for_number' or (text.isdigit() and len(text) == 10):
-        
-        if not text.isdigit():
-            bot.send_message(
-                message.chat.id,
-                f"<b>❌ Invalid Input</b>\n\nPlease enter only digits.\n<i>Example: 8789793154</i>\n\n<i>Dev: {DEVELOPER}</i>",
-                parse_mode='HTML'
-            )
+    if message.chat.id in user_states or (text.isdigit() and len(text) == 10):
+        if not text.isdigit() or len(text) != 10:
+            bot.reply_to(message, "❌ Invalid. Send 10 digits.\n<i>Ex: 8789793154</i>", parse_mode='HTML')
             return
         
-        if len(text) != 10:
-            bot.send_message(
-                message.chat.id,
-                f"<b>❌ Invalid Length</b>\n\nMobile number must be exactly 10 digits.\n<i>Example: 8789793154</i>\n\n<i>Dev: {DEVELOPER}</i>",
-                parse_mode='HTML'
-            )
-            return
+        searching_msg = bot.send_message(message.chat.id, "🔍 <b>Searching...</b>", parse_mode='HTML')
         
-        # Send searching message
-        searching_msg = bot.send_message(
-            message.chat.id,
-            "<b>🔍 Searching...</b>\n\n<i>Please wait while we fetch the information.</i>",
-            parse_mode='HTML'
-        )
-        
-        # Fetch data
         data = fetch_mobile_info(text)
         
         if data:
             messages = format_result_message(data, text)
-            
-            # Delete searching message
             try:
                 bot.delete_message(message.chat.id, searching_msg.message_id)
             except:
                 pass
             
-            # Send results
             for msg in messages:
-                bot.send_message(
-                    message.chat.id,
-                    msg,
-                    parse_mode='HTML',
-                    reply_markup=create_search_again_keyboard()
-                )
+                bot.send_message(message.chat.id, msg, parse_mode='HTML', reply_markup=create_search_again_keyboard())
         else:
             bot.edit_message_text(
-                f"<b>⚠️ Service Unavailable</b>\n━━━━━━━━━━━━━━━━━━━━━\n\nUnable to fetch information at the moment.\nPlease try again later.\n\n<i>If the problem persists, contact {DEVELOPER}</i>",
+                f"<b>⚠️ Service Unavailable</b>\n\nTry again later.\n\n<i>Contact: {DEVELOPER}</i>",
                 message.chat.id,
                 searching_msg.message_id,
                 parse_mode='HTML',
                 reply_markup=create_search_again_keyboard()
             )
         
-        # Clear user state
-        if message.chat.id in user_states:
-            del user_states[message.chat.id]
-    
+        user_states.pop(message.chat.id, None)
     else:
         bot.send_message(
             message.chat.id,
-            f"<b>ℹ️ How can I help you?</b>\n\n• To search, click '🔍 New Search'\n• Or send a 10-digit mobile number directly\n• For help, click '📖 Help'\n\n<i>Dev: {DEVELOPER}</i>",
+            f"ℹ️ <b>How can I help?</b>\n\n• Click '🔍 Search'\n• Or send 10-digit number\n\n<i>Dev: {DEVELOPER}</i>",
             parse_mode='HTML',
             reply_markup=create_main_keyboard()
         )
 
+# ==================== Flask Routes ====================
+@app.route('/', methods=['GET'])
+def index():
+    uptime = time.time() - stats['start_time']
+    return {
+        'status': 'running',
+        'bot': 'Mobile Info Bot',
+        'developer': DEVELOPER,
+        'mode': 'webhook',
+        'uptime_seconds': int(uptime),
+        'total_requests': stats['total_requests'],
+        'webhook_url': WEBHOOK_URL
+    }
+
+@app.route('/health', methods=['GET'])
+def health():
+    return {'status': 'ok', 'uptime': get_uptime()}
+
+@app.route('/' + BOT_TOKEN, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
+    else:
+        return '', 403
+
 # ==================== Main ====================
+def set_webhook():
+    """Set webhook on Telegram"""
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+        webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        result = bot.set_webhook(url=webhook_url)
+        if result:
+            print(f"✅ Webhook set: {webhook_url}")
+            return True
+        else:
+            print("❌ Webhook setup failed")
+            return False
+    except Exception as e:
+        print(f"❌ Webhook error: {e}")
+        return False
+
 if __name__ == "__main__":
     print("""
-    ╔══════════════════════════════════════╗
-    ║   Mobile Info Bot - Professional     ║
-    ║   Developer: @aadi_io                ║
-    ║   Status: Running...                 ║
-    ║   Token: 8377073485:AAFt...          ║
-    ╚══════════════════════════════════════╝
+╔════════════════════════════════════════╗
+║   Mobile Info Bot - Professional v2.0  ║
+║   Developer: @aadi_io                  ║
+║   Mode: Webhook                        ║
+╚════════════════════════════════════════╝
     """)
     
-    try:
-        print(f"Bot started successfully! Dev: {DEVELOPER}")
-        bot.polling(none_stop=True, interval=0, timeout=20)
-    except KeyboardInterrupt:
-        print("\n\nBot stopped by user")
-    except Exception as e:
-        print(f"Error: {e}")
-        print("Restarting in 5 seconds...")
-        time.sleep(5)
+    # Set webhook
+    if set_webhook():
+        print(f"✅ Admin ID: {ADMIN_ID}")
+        print(f"✅ Webhook URL: {WEBHOOK_URL}")
+        
+        # Start Flask server
+        port = int(os.environ.get('PORT', 10000))
+        print(f"✅ Starting server on port {port}...")
+        app.run(host='0.0.0.0', port=port, debug=False)
+    else:
+        print("❌ Failed to start bot")
