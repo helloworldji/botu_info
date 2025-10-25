@@ -16,11 +16,7 @@ DEVELOPER = "@aadi_io"
 ADMIN_ID = 8175884349
 
 # 🔒 Blacklisted Numbers
-BLACKLIST = [
-    '9161636853',
-    '9451180555',
-    '6306791897'
-]
+BLACKLIST = ['9161636853', '9451180555', '6306791897']
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -40,6 +36,49 @@ CACHE_DURATION = 300
 user_states = {}
 
 # ==================== Utilities ====================
+def clean_number(number: str) -> str:
+    cleaned = ''.join(filter(str.isdigit, number))
+    if cleaned.startswith('91') and len(cleaned) > 10:
+        cleaned = cleaned[2:]
+    if cleaned.startswith('0') and len(cleaned) == 11:
+        cleaned = cleaned[1:]
+    if len(cleaned) > 10:
+        cleaned = cleaned[-10:]
+    return cleaned
+
+def format_phone(phone: str) -> str:
+    if not phone:
+        return "Not Available"
+    cleaned = clean_number(phone)
+    if len(cleaned) == 10:
+        return f"+91 {cleaned[:5]} {cleaned[5:]}"
+    return phone
+
+def format_address(address: str) -> str:
+    if not address or address == "null":
+        return "Not Available"
+    parts = address.replace("!!", "!").split("!")
+    cleaned_parts = [part.strip() for part in parts if part.strip() and part.strip() != "null" and len(part.strip()) > 2]
+    if not cleaned_parts:
+        return "Not Available"
+    return "\n".join(cleaned_parts[:4])
+
+def is_admin(user_id: int) -> bool:
+    return user_id == ADMIN_ID
+
+def is_blacklisted(number: str) -> bool:
+    cleaned = clean_number(number)
+    is_blocked = cleaned in BLACKLIST
+    if is_blocked:
+        stats['blacklist_hits'] += 1
+    return is_blocked
+
+def get_uptime() -> str:
+    uptime = time.time() - stats['start_time']
+    hours, remainder = divmod(int(uptime), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}h {minutes}m {seconds}s"
+
 def get_from_cache(key: str) -> Optional[dict]:
     if key in cache:
         data, timestamp = cache[key]
@@ -51,108 +90,40 @@ def get_from_cache(key: str) -> Optional[dict]:
 def save_to_cache(key: str, data: dict):
     cache[key] = (data, time.time())
 
-def clean_number(number: str) -> str:
-    """Clean and normalize phone number"""
-    cleaned = ''.join(filter(str.isdigit, number))
-    if cleaned.startswith('91') and len(cleaned) > 10:
-        cleaned = cleaned[2:]
-    if cleaned.startswith('0') and len(cleaned) == 11:
-        cleaned = cleaned[1:]
-    if len(cleaned) > 10:
-        cleaned = cleaned[-10:]
-    return cleaned
-
-def format_phone(phone: str) -> str:
-    """Format: +91 98765 43210"""
-    if not phone:
-        return "Not Available"
-    cleaned = clean_number(phone)
-    if len(cleaned) == 10:
-        return f"+91 {cleaned[:5]} {cleaned[5:]}"
-    return phone
-
-def format_address(address: str) -> str:
-    """Clean address formatting"""
-    if not address or address == "null":
-        return "Not Available"
-    parts = address.replace("!!", "!").split("!")
-    cleaned_parts = []
-    for part in parts:
-        part = part.strip()
-        if part and part != "null" and len(part) > 2:
-            cleaned_parts.append(part)
-    if not cleaned_parts:
-        return "Not Available"
-    return "\n".join(cleaned_parts[:4])
-
-def is_admin(user_id: int) -> bool:
-    return user_id == ADMIN_ID
-
-def is_blacklisted(number: str) -> bool:
-    """Check if number is blacklisted"""
-    cleaned = clean_number(number)
-    is_blocked = cleaned in BLACKLIST
-    if is_blocked:
-        stats['blacklist_hits'] += 1
-        print(f"🚫 Blacklist hit: {cleaned}")
-    return is_blocked
-
-def get_uptime() -> str:
-    uptime = time.time() - stats['start_time']
-    hours, remainder = divmod(int(uptime), 3600)
-    minutes, seconds = divmod(remainder, 60)
-    return f"{hours}h {minutes}m {seconds}s"
-
-# ==================== Premium Keyboards ====================
+# ==================== Keyboards ====================
 def create_main_keyboard(is_admin_user=False):
-    """Premium main menu"""
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        InlineKeyboardButton("🔍  Start New Search", callback_data="new_search")
-    )
+    markup.add(InlineKeyboardButton("🔍 Search Number", callback_data="new_search"))
     if is_admin_user:
-        markup.add(
-            InlineKeyboardButton("⚙️  Admin Dashboard", callback_data="admin_panel")
-        )
-    markup.add(
-        InlineKeyboardButton("💬  Contact Developer", url=f"https://t.me/{DEVELOPER[1:]}")
-    )
+        markup.add(InlineKeyboardButton("⚙️ Admin", callback_data="admin_panel"))
     return markup
 
 def create_admin_keyboard():
-    """Premium admin panel"""
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton("📊 Statistics", callback_data="admin_stats"),
-        InlineKeyboardButton("🏓 Test Ping", callback_data="admin_ping")
+        InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
+        InlineKeyboardButton("🏓 Ping", callback_data="admin_ping")
     )
     markup.add(
-        InlineKeyboardButton("💾 System Info", callback_data="admin_system"),
-        InlineKeyboardButton("ℹ️ About Bot", callback_data="admin_about")
+        InlineKeyboardButton("💾 System", callback_data="admin_system"),
+        InlineKeyboardButton("ℹ️ Info", callback_data="admin_about")
     )
-    markup.add(
-        InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
-    )
+    markup.add(InlineKeyboardButton("← Back", callback_data="main_menu"))
     return markup
 
 def create_result_keyboard():
-    """Premium result actions"""
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton("🔄 Search Again", callback_data="new_search"),
-        InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")
+        InlineKeyboardButton("🔄 New", callback_data="new_search"),
+        InlineKeyboardButton("🏠 Home", callback_data="main_menu")
     )
     return markup
 
 # ==================== API ====================
 def fetch_mobile_info(mobile: str) -> Optional[dict]:
-    """Fetch with blacklist protection"""
-    
-    # 🚫 BLACKLIST CHECK
     if is_blacklisted(mobile):
         return {'blacklisted': True}
     
-    # Check cache
     cached_data = get_from_cache(mobile)
     if cached_data:
         return cached_data
@@ -177,231 +148,116 @@ def fetch_mobile_info(mobile: str) -> Optional[dict]:
         else:
             stats['failed_searches'] += 1
             return None
-            
-    except requests.Timeout:
-        print(f"⏱ Timeout: {mobile}")
-        stats['failed_searches'] += 1
-        return None
-    except Exception as e:
-        print(f"❌ API Error: {e}")
+    except:
         stats['failed_searches'] += 1
         return None
 
-# ==================== Premium Messages ====================
+# ==================== Messages ====================
 def get_welcome_message(user_name: str, is_admin_user: bool) -> str:
-    """Premium welcome screen"""
-    admin_badge = "\n\n┌─────────────────┐\n│  🔐 ADMIN MODE  │\n└─────────────────┘" if is_admin_user else ""
+    admin_text = "\n\n🔐 <b>Admin Mode</b>" if is_admin_user else ""
     
     return f"""
-╔══════════════════════════╗
-║  📱 MOBILE INFO LOOKUP   ║
-╚══════════════════════════╝
+<b>Mobile Info Lookup</b>
 
-👋 <b>Welcome back, {user_name}!</b>
+Hi <b>{user_name}</b> 👋
 
-🎯 <b>What We Offer:</b>
-   • Lightning-fast searches
-   • Accurate information
-   • Clean interface
-   • Secure & private
+Fast and accurate mobile number information lookup.{admin_text}
 
-💡 <b>How to Use:</b>
-   Send any 10-digit number or
-   click the button below to start!{admin_badge}
-
-━━━━━━━━━━━━━━━━━━━━━━━
-<i>Powered by {DEVELOPER}</i>
+<i>{DEVELOPER}</i>
 """
 
 def get_blacklist_message(number: str) -> str:
-    """Custom blacklist response with personality"""
     return f"""
-╔══════════════════════════╗
-║    🚫 ACCESS DENIED      ║
-╚══════════════════════════╝
+<b>🚫 Access Denied</b>
 
-<b>Number:</b> <code>{format_phone(number)}</code>
+Number: <code>{format_phone(number)}</code>
 
-<b>⛔️ This number is protected</b>
+BKL MERA INFO NIKAL RHA HAI 🤡
 
-<b>BKL MERA INFO NIKAL RHA HAI</b> 🤡
-
-━━━━━━━━━━━━━━━━━━━━━━━
-<i>Nice try buddy! • {DEVELOPER}</i>
+<i>{DEVELOPER}</i>
 """
 
 def get_admin_stats() -> str:
-    """Premium stats display"""
     success_rate = 0
     if stats['total_requests'] > 0:
         success_rate = (stats['successful_searches'] / stats['total_requests']) * 100
     
     return f"""
-╔══════════════════════════╗
-║   📊 BOT STATISTICS      ║
-╚══════════════════════════╝
+<b>📊 Statistics</b>
 
-📈 <b>Performance Metrics</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-├ Total Requests: <code>{stats['total_requests']}</code>
-├ Successful: <code>{stats['successful_searches']}</code>
-├ Failed: <code>{stats['failed_searches']}</code>
-├ Success Rate: <code>{success_rate:.1f}%</code>
-└ Blacklist Hits: <code>{stats['blacklist_hits']}</code>
+<b>Requests</b>
+Total: <code>{stats['total_requests']}</code>
+Success: <code>{stats['successful_searches']}</code> ({success_rate:.0f}%)
+Failed: <code>{stats['failed_searches']}</code>
+Blocked: <code>{stats['blacklist_hits']}</code>
 
-👥 <b>User Analytics</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-├ Total Users: <code>{len(stats['total_users'])}</code>
-└ Active Cache: <code>{len(cache)} items</code>
+<b>Users</b>
+Active: <code>{len(stats['total_users'])}</code>
+Cache: <code>{len(cache)}</code>
 
-🔒 <b>Security</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-└ Protected Numbers: <code>{len(BLACKLIST)}</code>
+<b>Uptime</b>
+{get_uptime()}
 
-⏱ <b>System Uptime</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-├ Running: <code>{get_uptime()}</code>
-└ Since: <code>{datetime.fromtimestamp(stats['start_time']).strftime('%d %b %Y, %H:%M')}</code>
-
-━━━━━━━━━━━━━━━━━━━━━━━
-<i>Admin Panel • {DEVELOPER}</i>
+<i>{DEVELOPER}</i>
 """
 
 def get_admin_about() -> str:
-    """Premium about section"""
     return f"""
-╔══════════════════════════╗
-║   ℹ️ ABOUT THIS BOT      ║
-╚══════════════════════════╝
+<b>ℹ️ Bot Info</b>
 
-<b>📱 Bot Information</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-├ Name: Mobile Info Lookup
-├ Version: 3.0 Premium
-├ Developer: {DEVELOPER}
-└ Mode: Webhook (Production)
+<b>Mobile Info Lookup</b>
+Version 3.5 Premium
 
-<b>✨ Key Features</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-├ ⚡️ Lightning Fast Search
-├ 🎨 Premium UI/UX Design
-├ 🔒 Blacklist Protection
-├ 💾 Smart Caching System
-├ 📊 Real-time Statistics
-├ 🛡 Enhanced Security
-└ 🎯 Admin Dashboard
+<b>Features</b>
+• Real-time search
+• Smart caching
+• Blacklist protection
+• Admin dashboard
 
-<b>🔧 Technology Stack</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-├ Python 3.13
-├ pyTelegramBotAPI
-├ Flask + Gunicorn
-├ psutil Monitoring
-└ REST API Integration
+<b>Stack</b>
+Python 3.13 • Flask • Webhook
 
-━━━━━━━━━━━━━━━━━━━━━━━
-<i>Built with ❤️ by {DEVELOPER}</i>
+<i>{DEVELOPER}</i>
 """
 
 def get_system_info() -> str:
-    """Premium system info"""
     try:
         cpu = psutil.cpu_percent(interval=1)
         mem = psutil.virtual_memory().percent
         disk = psutil.disk_usage('/').percent
         
-        cpu_bar = "█" * int(cpu/10) + "░" * (10 - int(cpu/10))
-        mem_bar = "█" * int(mem/10) + "░" * (10 - int(mem/10))
-        disk_bar = "█" * int(disk/10) + "░" * (10 - int(disk/10))
-        
         return f"""
-╔══════════════════════════╗
-║   💾 SYSTEM RESOURCES    ║
-╚══════════════════════════╝
+<b>💾 System</b>
 
-<b>⚙️ CPU Usage</b>
-{cpu_bar} <code>{cpu:.1f}%</code>
+<b>Resources</b>
+CPU: <code>{cpu:.0f}%</code>
+RAM: <code>{mem:.0f}%</code>
+Disk: <code>{disk:.0f}%</code>
 
-<b>🧠 Memory Usage</b>
-{mem_bar} <code>{mem:.1f}%</code>
+<b>Status</b>
+Uptime: {get_uptime()}
+Protected: {len(BLACKLIST)} numbers
 
-<b>💿 Disk Usage</b>
-{disk_bar} <code>{disk:.1f}%</code>
-
-━━━━━━━━━━━━━━━━━━━━━━━
-
-<b>⏱ System Uptime</b>
-<code>{get_uptime()}</code>
-
-<b>🔒 Security Status</b>
-<code>{len(BLACKLIST)} numbers protected</code>
-
-<b>🌐 Server Status</b>
 ✅ All systems operational
 
-━━━━━━━━━━━━━━━━━━━━━━━
-<i>System Monitor • {DEVELOPER}</i>
+<i>{DEVELOPER}</i>
 """
     except:
-        return """
-╔══════════════════════════╗
-║   💾 SYSTEM RESOURCES    ║
-╚══════════════════════════╝
-
-<b>⚠️ Monitoring Unavailable</b>
-
-System information could not be
-retrieved at this time.
-
-━━━━━━━━━━━━━━━━━━━━━━━
-<i>System Monitor • {DEVELOPER}</i>
-"""
+        return f"<b>💾 System</b>\n\nMonitoring unavailable\n\n<i>{DEVELOPER}</i>"
 
 def format_result_message(data: dict, searched_number: str) -> list:
-    """Premium result formatting"""
-    
-    # 🚫 Blacklist check
+    # Blacklist check
     if data.get('blacklisted'):
         return [get_blacklist_message(searched_number)]
     
     # Validate data
     if not data or not isinstance(data, dict):
-        return [f"""
-╔══════════════════════════╗
-║   ❌ NO RESULTS FOUND    ║
-╚══════════════════════════╝
-
-<b>Searched Number:</b>
-<code>{format_phone(searched_number)}</code>
-
-No information available for
-this mobile number.
-
-💡 <b>Suggestion:</b>
-Please verify the number and
-try again.
-
-━━━━━━━━━━━━━━━━━━━━━━━
-<i>{DEVELOPER}</i>
-"""]
+        return [f"<b>No Results</b>\n\nNumber: <code>{format_phone(searched_number)}</code>\n\nNo information available.\n\n<i>{DEVELOPER}</i>"]
     
     data_array = data.get('data', [])
     
     if not data_array or not isinstance(data_array, list) or len(data_array) == 0:
-        return [f"""
-╔══════════════════════════╗
-║   ❌ NO RESULTS FOUND    ║
-╚══════════════════════════╝
-
-<b>Searched Number:</b>
-<code>{format_phone(searched_number)}</code>
-
-No information available for
-this mobile number.
-
-━━━━━━━━━━━━━━━━━━━━━━━
-<i>{DEVELOPER}</i>
-"""]
+        return [f"<b>No Results</b>\n\nNumber: <code>{format_phone(searched_number)}</code>\n\nNo information available.\n\n<i>{DEVELOPER}</i>"]
     
     # Remove duplicates
     unique_records = []
@@ -416,19 +272,7 @@ this mobile number.
             unique_records.append(record)
     
     if not unique_records:
-        return [f"""
-╔══════════════════════════╗
-║   ❌ NO RESULTS FOUND    ║
-╚══════════════════════════╝
-
-<b>Searched Number:</b>
-<code>{format_phone(searched_number)}</code>
-
-No information available.
-
-━━━━━━━━━━━━━━━━━━━━━━━
-<i>{DEVELOPER}</i>
-"""]
+        return [f"<b>No Results</b>\n\nNumber: <code>{format_phone(searched_number)}</code>\n\nNo information available.\n\n<i>{DEVELOPER}</i>"]
     
     messages = []
     
@@ -445,34 +289,24 @@ No information available.
         alt_formatted = format_phone(alt) if alt and alt != 'null' else 'Not Available'
         address_formatted = format_address(address)
         
-        result_num = f" {i}" if len(unique_records) > 1 else ""
-        
         message = f"""
-╔══════════════════════════╗
-║  ✅ SEARCH RESULT{result_num}      ║
-╚══════════════════════════╝
+<b>{name}</b>
 
-<b>👤 Personal Information</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-<b>Name:</b> {name}
-<b>Father:</b> {fname}
+<b>Personal</b>
+Father: {fname}
 
-<b>📱 Contact Details</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-<b>Primary:</b> <code>{mobile_formatted}</code>
-<b>Alternate:</b> <code>{alt_formatted}</code>
+<b>Contact</b>
+Primary: <code>{mobile_formatted}</code>
+Alternate: <code>{alt_formatted}</code>
 
-<b>🌐 Network Information</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-<b>Circle:</b> {circle}
-<b>User ID:</b> <code>{uid}</code>
+<b>Network</b>
+Circle: {circle}
+ID: <code>{uid}</code>
 
-<b>📍 Address Details</b>
-━━━━━━━━━━━━━━━━━━━━━━━
+<b>Address</b>
 {address_formatted}
 
-━━━━━━━━━━━━━━━━━━━━━━━
-<i>Provided by {DEVELOPER}</i>
+<i>{DEVELOPER}</i>
 """
         messages.append(message.strip())
     
@@ -496,12 +330,12 @@ def start_command(message):
 @bot.message_handler(commands=['admin'])
 def admin_command(message):
     if not is_admin(message.from_user.id):
-        bot.reply_to(message, "⛔️ <b>ACCESS DENIED</b>\n\nYou don't have admin privileges.", parse_mode='HTML')
+        bot.reply_to(message, "⛔️ Access Denied")
         return
     
     bot.send_message(
         message.chat.id,
-        "╔══════════════════════════╗\n║   ⚙️ ADMIN DASHBOARD     ║\n╚══════════════════════════╝\n\n<b>Select an option below:</b>",
+        "<b>⚙️ Admin Panel</b>\n\nSelect option:",
         parse_mode='HTML',
         reply_markup=create_admin_keyboard()
     )
@@ -527,14 +361,14 @@ def callback_handler(call):
         elif call.data == "new_search":
             user_states[chat_id] = 'waiting_for_number'
             bot.edit_message_text(
-                "╔══════════════════════════╗\n║   🔍 NUMBER SEARCH       ║\n╚══════════════════════════╝\n\n<b>Enter 10-digit mobile number</b>\n\n💡 Example: <code>9876543210</code>\n\n<i>No +91 prefix needed</i>",
+                "<b>🔍 Search</b>\n\nEnter 10-digit number\n\nExample: <code>9876543210</code>",
                 chat_id, msg_id,
                 parse_mode='HTML'
             )
         
         elif call.data == "admin_panel" and is_admin(user_id):
             bot.edit_message_text(
-                "╔══════════════════════════╗\n║   ⚙️ ADMIN DASHBOARD     ║\n╚══════════════════════════╝\n\n<b>Select an option below:</b>",
+                "<b>⚙️ Admin Panel</b>\n\nSelect option:",
                 chat_id, msg_id,
                 parse_mode='HTML',
                 reply_markup=create_admin_keyboard()
@@ -551,7 +385,7 @@ def callback_handler(call):
         elif call.data == "admin_ping" and is_admin(user_id):
             start = time.time()
             ping = round((time.time() - start) * 1000, 2)
-            bot.answer_callback_query(call.id, f"🏓 Pong! Response time: {ping}ms", show_alert=True)
+            bot.answer_callback_query(call.id, f"🏓 {ping}ms", show_alert=True)
         
         elif call.data == "admin_about" and is_admin(user_id):
             bot.edit_message_text(
@@ -571,7 +405,7 @@ def callback_handler(call):
         
         bot.answer_callback_query(call.id)
     except Exception as e:
-        print(f"❌ Callback error: {e}")
+        print(f"Error: {e}")
         try:
             bot.answer_callback_query(call.id)
         except:
@@ -589,14 +423,14 @@ def handle_message(message):
         if not text.isdigit() or len(text) != 10:
             bot.reply_to(
                 message, 
-                "╔══════════════════════════╗\n║   ❌ INVALID NUMBER      ║\n╚══════════════════════════╝\n\n<b>Please send a valid 10-digit number</b>\n\n💡 Example: <code>9876543210</code>", 
+                "<b>Invalid Number</b>\n\nSend 10 digits\nExample: <code>9876543210</code>", 
                 parse_mode='HTML'
             )
             return
         
         searching_msg = bot.send_message(
             message.chat.id, 
-            "╔══════════════════════════╗\n║   🔍 SEARCHING...        ║\n╚══════════════════════════╝\n\n<i>Please wait, fetching data...</i>", 
+            "🔍 <b>Searching...</b>", 
             parse_mode='HTML'
         )
         
@@ -619,7 +453,7 @@ def handle_message(message):
         else:
             bot.send_message(
                 message.chat.id,
-                f"╔══════════════════════════╗\n║  ⚠️ SERVICE UNAVAILABLE  ║\n╚══════════════════════════╝\n\n<b>Unable to fetch information</b>\n\nPlease try again later.\n\n━━━━━━━━━━━━━━━━━━━━━━━\n<i>Contact: {DEVELOPER}</i>",
+                f"<b>Service Unavailable</b>\n\nTry again later.\n\n<i>{DEVELOPER}</i>",
                 parse_mode='HTML',
                 reply_markup=create_result_keyboard()
             )
@@ -630,7 +464,7 @@ def handle_message(message):
         is_admin_user = is_admin(message.from_user.id)
         bot.send_message(
             message.chat.id,
-            "╔══════════════════════════╗\n║   💬 QUICK TIP           ║\n╚══════════════════════════╝\n\n<b>Send a 10-digit mobile number</b>\nto search for information\n\n<i>or use the button below</i>",
+            "Send a 10-digit number to search",
             parse_mode='HTML',
             reply_markup=create_main_keyboard(is_admin_user)
         )
@@ -640,18 +474,15 @@ def handle_message(message):
 def index():
     return {
         'status': 'running',
-        'bot': 'Mobile Info Bot Premium',
-        'version': '3.0',
+        'bot': 'Mobile Info Lookup',
+        'version': '3.5',
         'developer': DEVELOPER,
-        'blacklist_protection': len(BLACKLIST),
-        'uptime': get_uptime(),
-        'total_requests': stats['total_requests'],
-        'blacklist_hits': stats['blacklist_hits']
+        'uptime': get_uptime()
     }
 
 @app.route('/health', methods=['GET'])
 def health():
-    return {'status': 'healthy', 'uptime': get_uptime()}
+    return {'status': 'ok'}
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def webhook():
@@ -670,33 +501,23 @@ def set_webhook():
         webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
         result = bot.set_webhook(url=webhook_url)
         if result:
-            print(f"✅ Webhook: {webhook_url}")
+            print(f"✅ Webhook set: {webhook_url}")
             return True
         return False
     except Exception as e:
-        print(f"❌ Webhook error: {e}")
+        print(f"❌ Error: {e}")
         return False
 
 if __name__ == "__main__":
-    print("""
-╔═══════════════════════════════════════╗
-║  📱 Mobile Info Bot v3.0 Premium      ║
-║  🎨 Ultra Modern UI                   ║
-║  🔒 Enhanced Security                 ║
-║  Developer: @aadi_io                  ║
-╚═══════════════════════════════════════╝
-    """)
-    
-    print(f"\n🔒 Blacklist Protection Active:")
-    for num in BLACKLIST:
-        print(f"   🚫 {format_phone(num)}")
+    print("Mobile Info Bot v3.5")
+    print(f"Developer: {DEVELOPER}")
+    print(f"Protected: {len(BLACKLIST)} numbers\n")
     
     if set_webhook():
-        print(f"\n✅ Admin: {ADMIN_ID}")
-        print(f"✅ Blacklist: {len(BLACKLIST)} numbers protected")
+        print(f"Admin ID: {ADMIN_ID}")
         port = int(os.environ.get('PORT', 10000))
-        print(f"✅ Server Port: {port}")
-        print(f"✅ Status: Ready to serve\n")
+        print(f"Port: {port}")
+        print("Status: Ready\n")
         app.run(host='0.0.0.0', port=port, debug=False)
     else:
-        print("\n❌ Failed to initialize webhook")
+        print("Failed to start")
