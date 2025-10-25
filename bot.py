@@ -4,9 +4,10 @@ import time
 import psutil
 import os
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from flask import Flask, request
+from collections import deque
 
 # ==================== Configuration ====================
 BOT_TOKEN = "8377073485:AAFEON1BT-j138BN5HDKiqpGKnlI1mQIZjE"
@@ -21,7 +22,7 @@ BLACKLIST = ['9161636853', '9451180555', '6306791897']
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# Stats
+# Advanced Stats & Tracking
 stats = {
     'total_requests': 0,
     'successful_searches': 0,
@@ -30,6 +31,12 @@ stats = {
     'total_users': set(),
     'start_time': time.time()
 }
+
+# 📊 Search History (last 50 searches)
+search_history: deque = deque(maxlen=50)
+
+# User activity tracking
+user_activity = {}
 
 cache: Dict[str, tuple] = {}
 CACHE_DURATION = 300
@@ -77,7 +84,30 @@ def get_uptime() -> str:
     uptime = time.time() - stats['start_time']
     hours, remainder = divmod(int(uptime), 3600)
     minutes, seconds = divmod(remainder, 60)
+    days = hours // 24
+    hours = hours % 24
+    
+    if days > 0:
+        return f"{days}d {hours}h {minutes}m"
     return f"{hours}h {minutes}m {seconds}s"
+
+def log_search(user_id: int, user_name: str, number: str, status: str):
+    """Log search activity"""
+    search_entry = {
+        'timestamp': datetime.now(),
+        'user_id': user_id,
+        'user_name': user_name,
+        'number': number,
+        'status': status
+    }
+    search_history.append(search_entry)
+    
+    # Track user activity
+    if user_id not in user_activity:
+        user_activity[user_id] = {'name': user_name, 'searches': 0, 'last_search': None}
+    
+    user_activity[user_id]['searches'] += 1
+    user_activity[user_id]['last_search'] = datetime.now()
 
 def get_from_cache(key: str) -> Optional[dict]:
     if key in cache:
@@ -90,32 +120,55 @@ def get_from_cache(key: str) -> Optional[dict]:
 def save_to_cache(key: str, data: dict):
     cache[key] = (data, time.time())
 
-# ==================== Keyboards ====================
+def calculate_ping() -> float:
+    """Calculate real API ping"""
+    try:
+        start = time.time()
+        requests.get("https://api.telegram.org", timeout=5)
+        end = time.time()
+        return round((end - start) * 1000, 2)
+    except:
+        return 0.0
+
+# ==================== Advanced Keyboards ====================
 def create_main_keyboard(is_admin_user=False):
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔍 Search Number", callback_data="new_search"))
+    markup.add(
+        InlineKeyboardButton("🔍 Search Number", callback_data="new_search")
+    )
     if is_admin_user:
-        markup.add(InlineKeyboardButton("⚙️ Admin", callback_data="admin_panel"))
+        markup.add(
+            InlineKeyboardButton("⚙️ Admin Dashboard", callback_data="admin_panel")
+        )
+    markup.add(
+        InlineKeyboardButton("💬 Contact Developer", url=f"https://t.me/{DEVELOPER[1:]}")
+    )
     return markup
 
 def create_admin_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
-        InlineKeyboardButton("🏓 Ping", callback_data="admin_ping")
+        InlineKeyboardButton("📊 Statistics", callback_data="admin_stats"),
+        InlineKeyboardButton("🏓 Test Ping", callback_data="admin_ping")
     )
     markup.add(
-        InlineKeyboardButton("💾 System", callback_data="admin_system"),
-        InlineKeyboardButton("ℹ️ Info", callback_data="admin_about")
+        InlineKeyboardButton("📜 Search History", callback_data="admin_history"),
+        InlineKeyboardButton("👥 User Activity", callback_data="admin_users")
     )
-    markup.add(InlineKeyboardButton("← Back", callback_data="main_menu"))
+    markup.add(
+        InlineKeyboardButton("💾 System Info", callback_data="admin_system"),
+        InlineKeyboardButton("ℹ️ Bot Info", callback_data="admin_about")
+    )
+    markup.add(
+        InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
+    )
     return markup
 
 def create_result_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton("🔄 New", callback_data="new_search"),
-        InlineKeyboardButton("🏠 Home", callback_data="main_menu")
+        InlineKeyboardButton("🔄 Search Again", callback_data="new_search"),
+        InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")
     )
     return markup
 
@@ -152,29 +205,41 @@ def fetch_mobile_info(mobile: str) -> Optional[dict]:
         stats['failed_searches'] += 1
         return None
 
-# ==================== Messages ====================
+# ==================== Advanced Messages ====================
 def get_welcome_message(user_name: str, is_admin_user: bool) -> str:
-    admin_text = "\n\n🔐 <b>Admin Mode</b>" if is_admin_user else ""
+    admin_badge = "\n\n🔐 <b>Admin Access Enabled</b>" if is_admin_user else ""
     
     return f"""
-<b>Mobile Info Lookup</b>
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│  📱 <b>Mobile Info Lookup</b>  │
+╰━━━━━━━━━━━━━━━━━━━━━╯
 
-Hi <b>{user_name}</b> 👋
+👋 Welcome <b>{user_name}</b>!
 
-Fast and accurate mobile number information lookup.{admin_text}
+🎯 <b>What I Do:</b>
+   ⚡️ Fast mobile number lookup
+   🎯 Accurate information
+   🔒 Secure & private
+   💾 Smart caching{admin_badge}
 
-<i>{DEVELOPER}</i>
+━━━━━━━━━━━━━━━━━━━━━
+<i>Powered by {DEVELOPER}</i>
 """
 
 def get_blacklist_message(number: str) -> str:
     return f"""
-<b>🚫 Access Denied</b>
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│    🚫 <b>Access Denied</b>    │
+╰━━━━━━━━━━━━━━━━━━━━━╯
 
-Number: <code>{format_phone(number)}</code>
+📱 Number: <code>{format_phone(number)}</code>
 
-BKL MERA INFO NIKAL RHA HAI 🤡
+⛔️ <b>This number is protected</b>
 
-<i>{DEVELOPER}</i>
+<b>BKL MERA INFO NIKAL RHA HAI</b> 🤡
+
+━━━━━━━━━━━━━━━━━━━━━
+<i>Nice try! • {DEVELOPER}</i>
 """
 
 def get_admin_stats() -> str:
@@ -183,41 +248,131 @@ def get_admin_stats() -> str:
         success_rate = (stats['successful_searches'] / stats['total_requests']) * 100
     
     return f"""
-<b>📊 Statistics</b>
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│   📊 <b>Bot Statistics</b>    │
+╰━━━━━━━━━━━━━━━━━━━━━╯
 
-<b>Requests</b>
-Total: <code>{stats['total_requests']}</code>
-Success: <code>{stats['successful_searches']}</code> ({success_rate:.0f}%)
-Failed: <code>{stats['failed_searches']}</code>
-Blocked: <code>{stats['blacklist_hits']}</code>
+📈 <b>Request Metrics</b>
+├─ Total: <code>{stats['total_requests']}</code>
+├─ Success: <code>{stats['successful_searches']}</code>
+├─ Failed: <code>{stats['failed_searches']}</code>
+└─ Success Rate: <code>{success_rate:.1f}%</code>
 
-<b>Users</b>
-Active: <code>{len(stats['total_users'])}</code>
-Cache: <code>{len(cache)}</code>
+🔒 <b>Security</b>
+├─ Blocked: <code>{stats['blacklist_hits']}</code>
+└─ Protected: <code>{len(BLACKLIST)}</code> numbers
 
-<b>Uptime</b>
-{get_uptime()}
+👥 <b>Users</b>
+├─ Total: <code>{len(stats['total_users'])}</code>
+├─ Active: <code>{len(user_activity)}</code>
+└─ Cache: <code>{len(cache)}</code> items
 
+⏱ <b>System</b>
+├─ Uptime: <code>{get_uptime()}</code>
+└─ Started: <code>{datetime.fromtimestamp(stats['start_time']).strftime('%d %b, %H:%M')}</code>
+
+━━━━━━━━━━━━━━━━━━━━━
+<i>Admin Panel • {DEVELOPER}</i>
+"""
+
+def get_search_history() -> str:
+    if not search_history:
+        return f"""
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│  📜 <b>Search History</b>     │
+╰━━━━━━━━━━━━━━━━━━━━━╯
+
+No searches recorded yet.
+
+━━━━━━━━━━━━━━━━━━━━━
 <i>{DEVELOPER}</i>
 """
+    
+    history_text = "╭━━━━━━━━━━━━━━━━━━━━━╮\n│  📜 <b>Search History</b>     │\n╰━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+    history_text += f"<b>Last {min(10, len(search_history))} Searches:</b>\n\n"
+    
+    for i, entry in enumerate(list(search_history)[-10:][::-1], 1):
+        timestamp = entry['timestamp'].strftime('%H:%M:%S')
+        user_name = entry['user_name']
+        number = format_phone(entry['number'])
+        status = entry['status']
+        
+        status_emoji = {
+            'success': '✅',
+            'failed': '❌',
+            'blacklist': '🚫'
+        }.get(status, '⚪️')
+        
+        history_text += f"{i}. {status_emoji} <code>{number}</code>\n"
+        history_text += f"   👤 {user_name} • ⏰ {timestamp}\n\n"
+    
+    history_text += f"━━━━━━━━━━━━━━━━━━━━━\n<i>Total: {len(search_history)} searches • {DEVELOPER}</i>"
+    
+    return history_text
+
+def get_user_activity() -> str:
+    if not user_activity:
+        return f"""
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│  👥 <b>User Activity</b>      │
+╰━━━━━━━━━━━━━━━━━━━━━╯
+
+No user activity recorded yet.
+
+━━━━━━━━━━━━━━━━━━━━━
+<i>{DEVELOPER}</i>
+"""
+    
+    # Sort by search count
+    sorted_users = sorted(user_activity.items(), key=lambda x: x[1]['searches'], reverse=True)
+    
+    activity_text = "╭━━━━━━━━━━━━━━━━━━━━━╮\n│  👥 <b>User Activity</b>      │\n╰━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+    activity_text += f"<b>Top {min(10, len(sorted_users))} Active Users:</b>\n\n"
+    
+    for i, (user_id, data) in enumerate(sorted_users[:10], 1):
+        name = data['name']
+        searches = data['searches']
+        last = data['last_search'].strftime('%d %b, %H:%M') if data['last_search'] else 'Never'
+        
+        activity_text += f"{i}. 👤 <b>{name}</b>\n"
+        activity_text += f"   🔍 {searches} searches • 🕐 {last}\n\n"
+    
+    activity_text += f"━━━━━━━━━━━━━━━━━━━━━\n<i>Total: {len(user_activity)} users • {DEVELOPER}</i>"
+    
+    return activity_text
 
 def get_admin_about() -> str:
     return f"""
-<b>ℹ️ Bot Info</b>
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│   ℹ️ <b>Bot Information</b>   │
+╰━━━━━━━━━━━━━━━━━━━━━╯
 
-<b>Mobile Info Lookup</b>
-Version 3.5 Premium
+📱 <b>Mobile Info Lookup Bot</b>
+Version 4.0 Advanced
 
-<b>Features</b>
-• Real-time search
-• Smart caching
-• Blacklist protection
-• Admin dashboard
+✨ <b>Features</b>
+├─ 🔍 Real-time search
+├─ 💾 Smart caching (5min)
+├─ 🔒 Blacklist protection
+├─ 📊 Advanced analytics
+├─ 📜 Search history
+└─ 👥 User tracking
 
-<b>Stack</b>
-Python 3.13 • Flask • Webhook
+🛠 <b>Tech Stack</b>
+├─ Python 3.13
+├─ pyTelegramBotAPI
+├─ Flask Webhook
+├─ psutil Monitoring
+└─ REST API Integration
 
-<i>{DEVELOPER}</i>
+🔧 <b>Admin Tools</b>
+├─ Real-time stats
+├─ User activity logs
+├─ Search history
+└─ System monitoring
+
+━━━━━━━━━━━━━━━━━━━━━
+<i>Built with ❤️ by {DEVELOPER}</i>
 """
 
 def get_system_info() -> str:
@@ -226,24 +381,54 @@ def get_system_info() -> str:
         mem = psutil.virtual_memory().percent
         disk = psutil.disk_usage('/').percent
         
+        # Create visual bars
+        def create_bar(percent):
+            filled = int(percent / 10)
+            return "█" * filled + "░" * (10 - filled)
+        
         return f"""
-<b>💾 System</b>
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│  💾 <b>System Resources</b>   │
+╰━━━━━━━━━━━━━━━━━━━━━╯
 
-<b>Resources</b>
-CPU: <code>{cpu:.0f}%</code>
-RAM: <code>{mem:.0f}%</code>
-Disk: <code>{disk:.0f}%</code>
+⚙️ <b>CPU Usage</b>
+{create_bar(cpu)}
+<code>{cpu:.1f}%</code>
 
-<b>Status</b>
-Uptime: {get_uptime()}
-Protected: {len(BLACKLIST)} numbers
+🧠 <b>Memory Usage</b>
+{create_bar(mem)}
+<code>{mem:.1f}%</code>
 
+💿 <b>Disk Usage</b>
+{create_bar(disk)}
+<code>{disk:.1f}%</code>
+
+━━━━━━━━━━━━━━━━━━━━━
+
+📊 <b>Performance</b>
+├─ Uptime: <code>{get_uptime()}</code>
+├─ Cache: <code>{len(cache)}</code> items
+└─ Protected: <code>{len(BLACKLIST)}</code> numbers
+
+🌐 <b>Status</b>
 ✅ All systems operational
 
+━━━━━━━━━━━━━━━━━━━━━
+<i>System Monitor • {DEVELOPER}</i>
+"""
+    except Exception as e:
+        return f"""
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│  💾 <b>System Resources</b>   │
+╰━━━━━━━━━━━━━━━━━━━━━╯
+
+⚠️ Monitoring unavailable
+
+{str(e)}
+
+━━━━━━━━━━━━━━━━━━━━━
 <i>{DEVELOPER}</i>
 """
-    except:
-        return f"<b>💾 System</b>\n\nMonitoring unavailable\n\n<i>{DEVELOPER}</i>"
 
 def format_result_message(data: dict, searched_number: str) -> list:
     # Blacklist check
@@ -252,12 +437,34 @@ def format_result_message(data: dict, searched_number: str) -> list:
     
     # Validate data
     if not data or not isinstance(data, dict):
-        return [f"<b>No Results</b>\n\nNumber: <code>{format_phone(searched_number)}</code>\n\nNo information available.\n\n<i>{DEVELOPER}</i>"]
+        return [f"""
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│   ❌ <b>No Results</b>        │
+╰━━━━━━━━━━━━━━━━━━━━━╯
+
+📱 Number: <code>{format_phone(searched_number)}</code>
+
+No information available for this number.
+
+━━━━━━━━━━━━━━━━━━━━━
+<i>{DEVELOPER}</i>
+"""]
     
     data_array = data.get('data', [])
     
     if not data_array or not isinstance(data_array, list) or len(data_array) == 0:
-        return [f"<b>No Results</b>\n\nNumber: <code>{format_phone(searched_number)}</code>\n\nNo information available.\n\n<i>{DEVELOPER}</i>"]
+        return [f"""
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│   ❌ <b>No Results</b>        │
+╰━━━━━━━━━━━━━━━━━━━━━╯
+
+📱 Number: <code>{format_phone(searched_number)}</code>
+
+No information available.
+
+━━━━━━━━━━━━━━━━━━━━━
+<i>{DEVELOPER}</i>
+"""]
     
     # Remove duplicates
     unique_records = []
@@ -272,7 +479,16 @@ def format_result_message(data: dict, searched_number: str) -> list:
             unique_records.append(record)
     
     if not unique_records:
-        return [f"<b>No Results</b>\n\nNumber: <code>{format_phone(searched_number)}</code>\n\nNo information available.\n\n<i>{DEVELOPER}</i>"]
+        return [f"""
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│   ❌ <b>No Results</b>        │
+╰━━━━━━━━━━━━━━━━━━━━━╯
+
+📱 Number: <code>{format_phone(searched_number)}</code>
+
+━━━━━━━━━━━━━━━━━━━━━
+<i>{DEVELOPER}</i>
+"""]
     
     messages = []
     
@@ -289,24 +505,29 @@ def format_result_message(data: dict, searched_number: str) -> list:
         alt_formatted = format_phone(alt) if alt and alt != 'null' else 'Not Available'
         address_formatted = format_address(address)
         
+        result_header = f"Result {i}" if len(unique_records) > 1 else "Search Result"
+        
         message = f"""
-<b>{name}</b>
+╭━━━━━━━━━━━━━━━━━━━━━╮
+│   ✅ <b>{result_header}</b>      │
+╰━━━━━━━━━━━━━━━━━━━━━╯
 
-<b>Personal</b>
-Father: {fname}
+👤 <b>{name}</b>
+👨 Father: {fname}
 
-<b>Contact</b>
-Primary: <code>{mobile_formatted}</code>
-Alternate: <code>{alt_formatted}</code>
+📱 <b>Contact Information</b>
+├─ Primary: <code>{mobile_formatted}</code>
+└─ Alternate: <code>{alt_formatted}</code>
 
-<b>Network</b>
-Circle: {circle}
-ID: <code>{uid}</code>
+🌐 <b>Network Details</b>
+├─ Circle: {circle}
+└─ ID: <code>{uid}</code>
 
-<b>Address</b>
+📍 <b>Address</b>
 {address_formatted}
 
-<i>{DEVELOPER}</i>
+━━━━━━━━━━━━━━━━━━━━━
+<i>Provided by {DEVELOPER}</i>
 """
         messages.append(message.strip())
     
@@ -330,12 +551,12 @@ def start_command(message):
 @bot.message_handler(commands=['admin'])
 def admin_command(message):
     if not is_admin(message.from_user.id):
-        bot.reply_to(message, "⛔️ Access Denied")
+        bot.reply_to(message, "⛔️ <b>Access Denied</b>\n\nAdmin privileges required.", parse_mode='HTML')
         return
     
     bot.send_message(
         message.chat.id,
-        "<b>⚙️ Admin Panel</b>\n\nSelect option:",
+        "╭━━━━━━━━━━━━━━━━━━━━━╮\n│  ⚙️ <b>Admin Dashboard</b>   │\n╰━━━━━━━━━━━━━━━━━━━━━╯\n\nSelect an option:",
         parse_mode='HTML',
         reply_markup=create_admin_keyboard()
     )
@@ -361,14 +582,14 @@ def callback_handler(call):
         elif call.data == "new_search":
             user_states[chat_id] = 'waiting_for_number'
             bot.edit_message_text(
-                "<b>🔍 Search</b>\n\nEnter 10-digit number\n\nExample: <code>9876543210</code>",
+                "╭━━━━━━━━━━━━━━━━━━━━━╮\n│   🔍 <b>Number Search</b>    │\n╰━━━━━━━━━━━━━━━━━━━━━╯\n\n<b>Enter 10-digit mobile number</b>\n\n💡 Example: <code>9876543210</code>\n\n━━━━━━━━━━━━━━━━━━━━━\n<i>No +91 prefix needed</i>",
                 chat_id, msg_id,
                 parse_mode='HTML'
             )
         
         elif call.data == "admin_panel" and is_admin(user_id):
             bot.edit_message_text(
-                "<b>⚙️ Admin Panel</b>\n\nSelect option:",
+                "╭━━━━━━━━━━━━━━━━━━━━━╮\n│  ⚙️ <b>Admin Dashboard</b>   │\n╰━━━━━━━━━━━━━━━━━━━━━╯\n\nSelect an option:",
                 chat_id, msg_id,
                 parse_mode='HTML',
                 reply_markup=create_admin_keyboard()
@@ -383,9 +604,34 @@ def callback_handler(call):
             )
         
         elif call.data == "admin_ping" and is_admin(user_id):
-            start = time.time()
-            ping = round((time.time() - start) * 1000, 2)
-            bot.answer_callback_query(call.id, f"🏓 {ping}ms", show_alert=True)
+            # Show calculating message
+            bot.answer_callback_query(call.id, "🏓 Calculating real ping...", show_alert=False)
+            
+            # Calculate real ping
+            ping = calculate_ping()
+            
+            # Show real ping
+            bot.answer_callback_query(
+                call.id, 
+                f"🏓 Pong!\n\nAPI Response Time: {ping}ms", 
+                show_alert=True
+            )
+        
+        elif call.data == "admin_history" and is_admin(user_id):
+            bot.edit_message_text(
+                get_search_history(),
+                chat_id, msg_id,
+                parse_mode='HTML',
+                reply_markup=create_admin_keyboard()
+            )
+        
+        elif call.data == "admin_users" and is_admin(user_id):
+            bot.edit_message_text(
+                get_user_activity(),
+                chat_id, msg_id,
+                parse_mode='HTML',
+                reply_markup=create_admin_keyboard()
+            )
         
         elif call.data == "admin_about" and is_admin(user_id):
             bot.edit_message_text(
@@ -405,7 +651,7 @@ def callback_handler(call):
         
         bot.answer_callback_query(call.id)
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Callback error: {e}")
         try:
             bot.answer_callback_query(call.id)
         except:
@@ -413,7 +659,9 @@ def callback_handler(call):
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
-    stats['total_users'].add(message.from_user.id)
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name or "User"
+    stats['total_users'].add(user_id)
     
     text = clean_number(message.text)
     is_waiting = message.chat.id in user_states
@@ -423,24 +671,40 @@ def handle_message(message):
         if not text.isdigit() or len(text) != 10:
             bot.reply_to(
                 message, 
-                "<b>Invalid Number</b>\n\nSend 10 digits\nExample: <code>9876543210</code>", 
+                "╭━━━━━━━━━━━━━━━━━━━━━╮\n│  ❌ <b>Invalid Number</b>    │\n╰━━━━━━━━━━━━━━━━━━━━━╯\n\n<b>Send a valid 10-digit number</b>\n\n💡 Example: <code>9876543210</code>", 
                 parse_mode='HTML'
             )
             return
         
+        # Log search attempt
         searching_msg = bot.send_message(
             message.chat.id, 
-            "🔍 <b>Searching...</b>", 
+            "╭━━━━━━━━━━━━━━━━━━━━━╮\n│  🔍 <b>Searching...</b>      │\n╰━━━━━━━━━━━━━━━━━━━━━╯\n\n<i>Fetching information...</i>", 
             parse_mode='HTML'
         )
         
+        # Fetch data
         data = fetch_mobile_info(text)
         
+        # Determine status
+        if data:
+            if data.get('blacklisted'):
+                status = 'blacklist'
+            else:
+                status = 'success'
+        else:
+            status = 'failed'
+        
+        # Log the search
+        log_search(user_id, user_name, text, status)
+        
+        # Delete searching message
         try:
             bot.delete_message(message.chat.id, searching_msg.message_id)
         except:
             pass
         
+        # Send results
         if data:
             messages = format_result_message(data, text)
             for msg in messages:
@@ -453,7 +717,7 @@ def handle_message(message):
         else:
             bot.send_message(
                 message.chat.id,
-                f"<b>Service Unavailable</b>\n\nTry again later.\n\n<i>{DEVELOPER}</i>",
+                f"╭━━━━━━━━━━━━━━━━━━━━━╮\n│ ⚠️ <b>Service Error</b>      │\n╰━━━━━━━━━━━━━━━━━━━━━╯\n\n<b>Unable to fetch data</b>\n\nPlease try again later.\n\n━━━━━━━━━━━━━━━━━━━━━\n<i>Contact: {DEVELOPER}</i>",
                 parse_mode='HTML',
                 reply_markup=create_result_keyboard()
             )
@@ -464,7 +728,7 @@ def handle_message(message):
         is_admin_user = is_admin(message.from_user.id)
         bot.send_message(
             message.chat.id,
-            "Send a 10-digit number to search",
+            "╭━━━━━━━━━━━━━━━━━━━━━╮\n│   💡 <b>Quick Tip</b>        │\n╰━━━━━━━━━━━━━━━━━━━━━╯\n\n<b>Send a 10-digit number</b>\nto search for information\n\n━━━━━━━━━━━━━━━━━━━━━\n<i>or use the button below</i>",
             parse_mode='HTML',
             reply_markup=create_main_keyboard(is_admin_user)
         )
@@ -474,15 +738,25 @@ def handle_message(message):
 def index():
     return {
         'status': 'running',
-        'bot': 'Mobile Info Lookup',
-        'version': '3.5',
+        'bot': 'Mobile Info Lookup Advanced',
+        'version': '4.0',
         'developer': DEVELOPER,
-        'uptime': get_uptime()
+        'features': {
+            'search_tracking': True,
+            'user_analytics': True,
+            'real_ping': True
+        },
+        'stats': {
+            'uptime': get_uptime(),
+            'total_requests': stats['total_requests'],
+            'total_users': len(stats['total_users']),
+            'searches_tracked': len(search_history)
+        }
     }
 
 @app.route('/health', methods=['GET'])
 def health():
-    return {'status': 'ok'}
+    return {'status': 'healthy', 'uptime': get_uptime()}
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def webhook():
@@ -501,7 +775,7 @@ def set_webhook():
         webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
         result = bot.set_webhook(url=webhook_url)
         if result:
-            print(f"✅ Webhook set: {webhook_url}")
+            print(f"✅ Webhook: {webhook_url}")
             return True
         return False
     except Exception as e:
@@ -509,15 +783,23 @@ def set_webhook():
         return False
 
 if __name__ == "__main__":
-    print("Mobile Info Bot v3.5")
-    print(f"Developer: {DEVELOPER}")
-    print(f"Protected: {len(BLACKLIST)} numbers\n")
+    print("""
+╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮
+│  Mobile Info Bot v4.0 Advanced   │
+│  Developer: @aadi_io              │
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯
+    """)
+    
+    print(f"\n🔒 Blacklist: {len(BLACKLIST)} numbers protected")
+    print(f"📊 Search tracking: Enabled")
+    print(f"👥 User analytics: Enabled")
+    print(f"🏓 Real ping: Enabled\n")
     
     if set_webhook():
-        print(f"Admin ID: {ADMIN_ID}")
+        print(f"✅ Admin ID: {ADMIN_ID}")
         port = int(os.environ.get('PORT', 10000))
-        print(f"Port: {port}")
-        print("Status: Ready\n")
+        print(f"✅ Port: {port}")
+        print("✅ Status: Ready to serve\n")
         app.run(host='0.0.0.0', port=port, debug=False)
     else:
-        print("Failed to start")
+        print("❌ Failed to start webhook")
