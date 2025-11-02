@@ -11,7 +11,7 @@ from collections import deque
 
 # ==================== Config ====================
 BOT_TOKEN = "8377073485:AAE5qZVldUNyMPVIzLSQiVXnBrxvOYWyovo"
-WEBHOOK_URL = "https://botu-info.onrender.com"
+WEBHOOK_URL = "https://botu-info-xjjf.onrender.com"
 API_URL = "https://demon.taitanx.workers.dev/?mobile={}"
 DEV = "@aadi_io"
 ADMIN_ID = 8175884349
@@ -316,6 +316,7 @@ ID: <code>{uid}</code>
 # ==================== Handlers ====================
 @bot.message_handler(commands=['start'])
 def start(msg):
+    print(f"📨 /start from {msg.from_user.id}")
     name = msg.from_user.first_name or "User"
     uid = msg.from_user.id
     stats['users'].add(uid)
@@ -330,6 +331,7 @@ def start(msg):
 
 @bot.message_handler(commands=['admin'])
 def admin_cmd(msg):
+    print(f"📨 /admin from {msg.from_user.id}")
     if msg.from_user.id != ADMIN_ID:
         bot.reply_to(msg, "⛔️ <b>Access Denied</b>", parse_mode='HTML')
         return
@@ -343,6 +345,7 @@ def admin_cmd(msg):
 
 @bot.callback_query_handler(func=lambda c: True)
 def callback(call):
+    print(f"🔘 Callback: {call.data} from {call.from_user.id}")
     try:
         cid = call.message.chat.id
         mid = call.message.message_id
@@ -411,7 +414,7 @@ def callback(call):
         
         bot.answer_callback_query(call.id)
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Callback Error: {e}")
         try:
             bot.answer_callback_query(call.id)
         except:
@@ -419,6 +422,7 @@ def callback(call):
 
 @bot.message_handler(func=lambda m: True)
 def handle(msg):
+    print(f"📨 Message from {msg.from_user.id}: {msg.text}")
     uid = msg.from_user.id
     name = msg.from_user.first_name or "User"
     stats['users'].add(uid)
@@ -489,8 +493,9 @@ def index():
     return {
         'status': 'running',
         'bot': 'Mobile Info Lookup',
-        'version': '4.1',
+        'version': '4.2',
         'developer': DEV,
+        'webhook': f"{WEBHOOK_URL}/{BOT_TOKEN}",
         'stats': {
             'uptime': uptime(),
             'requests': stats['total'],
@@ -503,39 +508,82 @@ def index():
 def health():
     return {'status': 'healthy', 'uptime': uptime()}
 
+@app.route('/webhook-info', methods=['GET'])
+def webhook_info():
+    """Check webhook status"""
+    try:
+        info = bot.get_webhook_info()
+        return {
+            'url': info.url,
+            'pending_count': info.pending_update_count,
+            'last_error': info.last_error_message,
+            'last_error_date': info.last_error_date,
+            'max_connections': info.max_connections
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def webhook():
+    print(f"📥 Webhook received at {datetime.now()}")
     if request.headers.get('content-type') == 'application/json':
         json_str = request.get_data().decode('utf-8')
+        print(f"📄 Data: {json_str[:100]}...")
         update = Update.de_json(json_str)
         bot.process_new_updates([update])
         return '', 200
+    print("⚠️ Invalid content-type")
     return '', 403
 
 # ==================== Main ====================
 def setup_webhook():
     try:
+        print("🔄 Removing old webhook...")
         bot.remove_webhook()
-        time.sleep(1)
+        time.sleep(2)
+        
         url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
-        if bot.set_webhook(url=url):
-            print(f"✅ Webhook: {url}")
+        print(f"🔗 Setting webhook: {url}")
+        
+        result = bot.set_webhook(url=url)
+        
+        if result:
+            print("✅ Webhook set successfully!")
+            
+            # Verify webhook
+            time.sleep(1)
+            info = bot.get_webhook_info()
+            print(f"📍 Webhook URL: {info.url}")
+            print(f"📊 Pending updates: {info.pending_update_count}")
+            if info.last_error_message:
+                print(f"⚠️ Last error: {info.last_error_message}")
+            
             return True
-        return False
+        else:
+            print("❌ Failed to set webhook")
+            return False
+            
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Webhook Error: {e}")
         return False
 
 if __name__ == "__main__":
-    print("\n🚀 Mobile Info Bot v4.1")
+    print("\n" + "="*50)
+    print("🚀 Mobile Info Bot v4.2")
     print(f"👤 Developer: {DEV}")
-    print(f"🔒 Protected: {len(BLACKLIST)} numbers\n")
+    print(f"🔒 Protected: {len(BLACKLIST)} numbers")
+    print(f"🆔 Admin ID: {ADMIN_ID}")
+    print(f"🌐 Webhook: {WEBHOOK_URL}")
+    print("="*50 + "\n")
     
     if setup_webhook():
         port = int(os.environ.get('PORT', 10000))
-        print(f"✅ Admin: {ADMIN_ID}")
-        print(f"✅ Port: {port}")
-        print("✅ Ready\n")
+        print(f"\n✅ Port: {port}")
+        print("✅ Bot is ready!")
+        print(f"🌐 Visit: {WEBHOOK_URL}")
+        print(f"🔍 Check webhook: {WEBHOOK_URL}/webhook-info")
+        print("\n" + "="*50 + "\n")
+        
         app.run(host='0.0.0.0', port=port, debug=False)
     else:
-        print("❌ Failed to start\n")
+        print("\n❌ Failed to start - webhook setup error\n")
