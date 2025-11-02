@@ -10,7 +10,7 @@ from flask import Flask, request
 from collections import deque
 
 # ==================== Config ====================
-BOT_TOKEN = "8377073485:AAFEON1BT-j138BN5HDKiqpGKnlI1mQIZjE"
+BOT_TOKEN = "8377073485:AAE5qZVldUNyMPVIzLSQiVXnBrxvOYWyovo"
 WEBHOOK_URL = "https://botu-info.onrender.com"
 API_URL = "https://demon.taitanx.workers.dev/?mobile={}"
 DEV = "@aadi_io"
